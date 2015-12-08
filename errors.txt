@@ -1,0 +1,59 @@
+FAILURE: config.module_path is defined but does not exist
+    MISTAKE: file "module_info.py" was not found at module_path
+MISTAKE: config.header_path is defined but does not exist
+    WARNING: failed to preload an expected header file from header_path
+MISTAKE: config.id_path is defined but does not exist
+    MISTAKE: id_path is not writeable
+ERROR: config.export_path is not defined
+    ERROR: config.export_path is defined but does not exist
+        MISTAKE: file "module.ini" was not found at export_path
+        ERROR: export_path is not writeable
+MISTAKE: config.game_path is defined but does not exist
+MISTAKE: config.wreck_path is defined but does not exist
+    DETAILS: failed to load colorama library from wreck_path
+MISTAKE: config.log_path is defined but does not exist
+    MISTAKE: log_path is not writeable
+WARNING: variables.txt file was not found at specified location, creating from scratch
+
+ERROR: module references a numeric/positional/string register outside of established range
+MISTAKE: string includes a substitute for numeric/string register > #99
+ERROR: undefined reference is used in code
+MISTAKE: undefined global variable is used in code
+MISTAKE: undefined local variable is used in code
+
+ERROR: failed to import contents of module X
+    ERROR: incorrect syntax in module entry X (show details)
+        ERROR: id parser failed: expected 0 or string reference name
+        ERROR: uid parser failed: expected string reference name
+        ERROR: int parser failed: expected const or static reference
+            MISTAKE: string/position register used for int value, probably a bug
+        ERROR: float parser failed: expected const or static reference
+            MISTAKE: string/position register used for float value, likely a bug
+        ERROR: string parser failed: expected string value
+        ERROR: reference parser failed: expected const or reference to library X
+        ERROR: script parser failed: illegal script tuple format
+            ERROR...
+        ERROR: tuple parser failed: not enough elements in tuple
+            WARNING: unparsed extra elements in data tuple
+        ERROR: expect parser failed: value must always be X
+        ERROR: aggregate parser failed: expected const or aggregate
+        ERROR: file parser failed: illegal file name
+            MISTAKE: file was not found at game/module directories
+        ERROR: intpair parser failed: expected a single value or a tuple of two values
+
+CRITICAL: failed to allocate reference X
+
+# change behavior on fatal errors wherever possible: remember, assume, continue compilation, don't export, report
+# improve globals visibility for modules and plugins
+# local variable lifetime check (paranoia mode)
+# trace local declaration in all conditional branches
+# syntax expected datatype check where appropriate
+# operation parameters expected datatype check
+# dialogs: dead ends, inaccessible dialogs
+# scripts: detect number of arguments and check all call_script calls
+# automatically update module.ini when necessary (num_hints parameter for starters)
+# check for missing/undeclared scenes in SceneObj folder
+# check for missing meshes in CommonRes and Resource folder
+# return compatibility with Python 2.5:
+#   * remove 'with' operations
+#   * remove '.format()' string method with %-substitution
