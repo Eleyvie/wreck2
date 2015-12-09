@@ -1,0 +1,89 @@
+WRECK WORKFLOW
+
+- Initialize WRECK:
+    + activate module import hook
+    - initialize fake `compiler` module
+* Parse command-line options:
+    + fill WRECK.config object with values parsed from command line
+* Check for any execution-aborting command line options (--help) and process them if necessary.
+* Validate configuration:
+    + ensure module_path is set and exists, terminate if not
+    + check if module_info.py file exists, error if not
+    + detect if we're dealing with Warband or M&B module
+    + force black&white mode if on Windows and colorama library is not loaded
+    + insert module_path as the first dir to check when importing modules
+- Initialize compilation data:
+    + define all data libraries
+    + define syntax parsers for all checkable libraries
+    - define processors and aggregators for all exportable libraries
+    + if necessary, initialize opmasks for libraries where opmasks are optional
+    + initialize shared module namespace
+    + initialize all register references (regN, sN, posN)
+    + register all 'protected' objects that WRECK will not allow module to change (registers, some functions etc)
+    - link fake `compiler` module to shared namespace (so `from compiler import *` will actually work properly)
+* Preload header files:
+    + attempt to preload all header files from module_path to fill shared namespace with data
+- Initialize module settings:
+    + load module_info.py file
+    + if export_dir is defined in module_info.py and export_path hasn't been set from command line, use export_dir value
+    + apply `write_id_files`, `show_performance_data` and `export_filename` config options from module_info.py
+    - disallow plugins from executing properly, store them for later processing
+    - allow override of most configuration settings from module_info.py file
+        ? maybe only do command line parsing AFTER module_info.py to ensure proper overrides
+        ? we will still need to check for `module_path` and `help` in command line before doing anything else
+* Validate module settings:
+    + check that export_path exists and is writeable
+    + check if module.ini file is present at export_path, warn if it doesn't
+    + load variables.txt file if it's available
+- Run plugins in the same order as they were imported before:
+    - check plugin dependencies if necessary, terminate compilation if dependencies do not match
+    - allow plugins to export global variables (define them in shared namespace)
+    - allow plugins to extend scripting syntax (create WreckCustomOperation objects in shared namespace)
+    - collect plugin data extensions (`scripts`, `map_icons` etc) for later processing
+    - collect plugin data injections (both old and new style) for later processing
+    - if plugin has `preprocess_entities` function defined, store it for later processing
+* Load all module files using shared namespace
+- Apply delayed plugin effects:
+    - extend all library sources with entries from plugins, honoring plugin load order
+    - add starting and ending injection points for all data entries
+    - add injection points in certain predefined data entries (like "script_game_start") for modder's convenience
+- Validate module data:
+    + parse data entries imported from modules, check syntax, bring data entries to standardized format
+    + handle module-level injections during parsing
+    - any syntax errors generated during parsing must correctly trace the origin of data entry (i.e. if it was present
+      in the original module file, added by plugin or injected by plugin)
+    - for as long as entry uid has been identified, syntax errors should not terminate compiler, instead error messages must be generated
+    - messages about syntax errors must include highlighting of actual error with color (`path` variable is used)
+* Resolve references:
+    + finalize entry lists - from this moment no entries can be deleted, added or inserted
+    + assign values to all game references according to their position in parsed library
+    + from this moment all references with undefined values will resolve to 0 and generate error message
+    + from this moment all expressions that use undefined operands will resolve to 0 silently (to prevent division by zero errors)
+* Modify troop entries, applying upgrades defined with calls to upgrade(), upgrade2() and define_troop_upgrade().
+- Run plugin preprocessors.
+- Execute plugin data replacers.
+- Compile all script objects:
+    - handle script-level injections on the fly
+    - replace syntax extensions with appropriate sequence of commands
+    - resolve dynamic expressions, generating code on the fly
+    - validate operations syntax
+    - collect quick strings and global variables to appropriate libraries
+- Compile module to bytecode:
+    - for all libraries, run processor on all entries and aggregator to generate resulting bytecode
+    - dialogs processor/aggregator are also responsible for filling dialog_states
+- Export module if export hasn't been disabled and there were no errors during compilation:
+    - export compiled module files (*.txt and a few others) to export_path.
+    - generate and export resulting ID files (ID_*.py) to module_path.
+
+COMPATIBILITY ISSUES:
+
+- WreckAggregateValue should inherit from `int` instead of `dict`, and work seamlessly with int/bigint numeric values from vanilla compiler
+    - aggregates must work seamlessly with numeric values from vanilla compiler
+    - for aggregate types that may have modified offsets in header files, those offsets must be traced with import hook
+- Injection points must be generated by compiler instead of requiring their presence in source files. This way, any
+  module extension which parses through module entries won't stumble upon WRECK injection points as they won't exist
+  at that point of time.
+- For the same purpose, new injection syntax is required which does not rely on injection points at all.
+- Is it possible to support code that collects information from module entries? Such code obviously resides AFTER
+  data declaration, so if we could terminate code execution at that point, process all injections and then resume,
+  it would be totally cool. So far this seems very unlikely.

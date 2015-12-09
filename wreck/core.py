@@ -19,6 +19,7 @@ import sys
 import imp
 import re
 import time
+from collections import OrderedDict
 try: import colorama
 except ImportError: pass
 # endregion
@@ -508,6 +509,30 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
             module = _python_import(module_name, gvars, lvars, fromlist, level)
     return module
 
+
+def _import_sanitize_plugin(data):
+    # FIXME: load `injection` dict
+    # FIXME: load data entries for all libraries
+    pass
+
+def register_plugin(name = None, glob = None):
+    if WRECK.register_plugins:
+        # If this is the first run for our plugin, we interrupt it's execution with a custom exception.
+        # This exception will be caught by our import hook and plugin will be stored for later.
+
+        stack = _get_current_stack()
+        raise WreckInterruptPlugin(stack[1][2])
+
+def require_plugin(*req_list):
+    pass
+
+def export_plugin_globals(**exported):
+    pass
+
+def extend_syntax(callback):
+    pass
+
+
 def _collect_injections(point, source = None):
     # Check if we need sourced list or not
     if source is not None:
@@ -623,13 +648,13 @@ def _parse_ref(lib_name):
         raise WreckParserException(path + [ofs], 'cannot parse `{0}` as `{1}`'.format(rec[ofs], library['basename']))
     return _parser
 
-def _parse_script(name_template, conversions = None):
+def _parse_script(name_template, conversions = None, check_canfail = False):
     def _parser(rec, ofs, path = [], **argd):
         if isinstance(rec[ofs], tuple): rec[ofs] = list(rec[ofs])
         if not isinstance(rec[ofs], list):
             raise WreckParserException(path + [ofs], 'this is not a script: {0!r}'.format(rec[ofs]))
         result = list(rec[ofs]) # We leave rec[ofs] in source, but pass result to sanitized
-        WRECK.scripting_blocks.append(WreckScript(name_template, rec[ofs], result, argd.get('entry'), path + [ofs], argd.get('library'), argd.get('uid'), conversions))
+        WRECK.scripting_blocks.append(WreckScript(name_template, rec[ofs], result, argd.get('entry'), path + [ofs], argd.get('library'), argd.get('uid'), conversions, check_canfail))
         return result, 1
     return _parser
 
@@ -725,6 +750,7 @@ def _parse_intpair(rec, ofs, path = [], **argd):
     value, steps = _parse_int(rec, ofs, path, **argd)
     return [value, 0], 1
 
+
 # |                                                                            |
 # |    COMPILER HELPER FUNCTIONS END                                           |
 # +                                                                            +
@@ -738,68 +764,6 @@ def _parse_intpair(rec, ofs, path = [], **argd):
 # +                                                                            +
 # |    COMPILER BASE CLASSES                                                   |
 # |                                                                            |
-
-
-class WreckScript(object):
-    name = ''
-    source = None
-    sanitized = None
-    entry = None
-    path = None
-
-    def __init__(self, name_gen, code_source, code_sanitized, entry, path, lib = None, uid = '', conversions = None):
-        self.source, self.sanitized, self.entry, self.path = code_source, code_sanitized, entry, path
-        # name_gen = '{lib}.{uid}{0}..{N}'
-        replacer = list(path)
-        if conversions:
-            for key, value in conversions.iteritems():
-                if isinstance(value, dict):
-                    replacer[key] = value.get(replacer[key])
-                elif callable(value):
-                    replacer[key] = value(replacer[key], entry, path)
-                else:
-                    replacer[key] = value # Fallback, we shouldn't ever use this
-        lib_name = '<?>'
-        self.name = name_gen.format(*replacer, lib = lib['basename'], uid = uid)
-
-    def compress_entry(self, entry):
-        result = ', '.join(self.compress_entry(item) if isinstance(item, list) else repr(item) for item in entry[:5])
-        return '[%s%s]' % (result, ', ...' if len(entry) > 5 else '')
-
-    def compile(self):
-        pass
-
-
-class current_module(object):
-
-    __stack = []
-
-    def __call__(self, module_name = None):
-        if module_name is None: return self.name
-        self.__stack.append(module_name)
-        return self
-
-    @property
-    def name(self):
-        return self.__stack[-1] if self.__stack else None
-
-    @property
-    def stack(self):
-        return tuple(self.__stack)
-
-    def enter(self):
-        return self.name
-
-    __enter__ = enter
-
-    def exit(self, exc_type = None, exc_value = None, tb = None):
-        if not self.__stack: raise WreckException('cannot leave current execution context: top of the stack already')
-        self.__stack.pop()
-        return self.name
-
-    __exit__ = exit
-
-current_module = current_module()
 
 
 class WreckException(Exception):
@@ -833,6 +797,42 @@ class WreckParserException(WreckException):
     def __init__(self, path, *args):
         self.error_path = path
         super(WreckParserException, self).__init__(*args)
+
+
+class WreckInterruptPlugin(Exception):
+    pass
+
+
+class current_module(object):
+
+    __stack = []
+
+    def __call__(self, module_name = None):
+        if module_name is None: return self.name
+        self.__stack.append(module_name)
+        return self
+
+    @property
+    def name(self):
+        return self.__stack[-1] if self.__stack else None
+
+    @property
+    def stack(self):
+        return tuple(self.__stack)
+
+    def enter(self):
+        return self.name
+
+    __enter__ = enter
+
+    def exit(self, exc_type = None, exc_value = None, tb = None):
+        if not self.__stack: raise WreckException('cannot leave current execution context: top of the stack already')
+        self.__stack.pop()
+        return self.name
+
+    __exit__ = exit
+
+current_module = current_module()
 
 
 class WreckLogger(object):
@@ -1551,6 +1551,47 @@ class WreckLibrary(object):
         return len(self.__data.entries)
 
 
+class WreckScript(object):
+    name = ''
+    source = None
+    sanitized = None
+    entry = None
+    path = None
+    check_canfail = False
+
+    def __init__(self, name_gen, code_source, code_sanitized, entry, path, lib = None, uid = '', conversions = None, check_canfail = False):
+        self.source, self.sanitized, self.entry, self.path = code_source, code_sanitized, entry, path
+        if check_canfail and not uid.startswith('cf_'):
+            self.check_canfail = True
+        # name_gen = '{lib}.{uid}{0}..{N}'
+        replacer = list(path)
+        if conversions:
+            for key, value in conversions.iteritems():
+                if isinstance(value, dict):
+                    replacer[key] = value.get(replacer[key])
+                elif callable(value):
+                    replacer[key] = value(replacer[key], entry, path)
+                else:
+                    replacer[key] = value # Fallback, we shouldn't ever use this
+        lib_name = '<?>'
+        self.name = name_gen.format(*replacer, lib = lib['basename'], uid = uid)
+
+    def compress_entry(self, entry):
+        result = ', '.join(self.compress_entry(item) if isinstance(item, list) else repr(item) for item in entry[:5])
+        return '[%s%s]' % (result, ', ...' if len(entry) > 5 else '')
+
+    def compile(self):
+        return
+        output = []
+        source = []
+        buffer = []
+        for op_number, operation in enumerate(source):
+            if isinstance(operation, WreckInjectionPoint):
+                pass # FIXME: implement injections
+            else:
+                pass
+
+
 # |                                                                            |
 # |    COMPILER BASE CLASSES END                                               |
 # +                                                                            +
@@ -1752,6 +1793,7 @@ class WRECK(object):
     troop_upgrades = []
     scripting_blocks = []
 
+    plugins = OrderedDict()
     injections = {}
 
     undefined_variables = set()
@@ -1819,7 +1861,7 @@ class WRECK(object):
         if not os.path.exists(cls.config.module_path):
             raise WreckException('module path "{0}" does not exist'.format(cls.config.module_path))
         if not os.path.exists('/'.join([cls.config.module_path, 'module_info.py'])):
-            cls.log.mistake('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
+            cls.log.error('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
             cls.config.parse_module_info = False
         if cls.config.warband_module is None:
             cls.config.warband_module = cls.module_files_exist('module_info_pages.py', 'module_postfx.py')
@@ -1874,7 +1916,7 @@ class WRECK(object):
                                                parser = _parse_tuple(_parse_file('{export_path}/SceneObj/{file}.scn'), _parse_int, _parse_id, _parse_id, (_parse_float, _parse_float), (_parse_float, _parse_float), _parse_float, _parse_id, [_parse_ref('scn')], [_parse_ref('trp')], _optional(_parse_id, '0')),
                                               )
         cls.libraries.script    = WreckLibrary('script', module = 'scripts', data = 'scripts', export = 'scripts', prefix = 'script_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_script('{lib}.{uid}(#{0})')),
+                                               parser = _parse_tuple(_parse_uid, _parse_script('{lib}.{uid}(#{0})', check_canfail = True)),
                                               )
         cls.libraries.skl       = WreckLibrary('skl', module = 'skills', data = 'skills', export = 'skills', prefix = 'skl_', uid_generator = _uid_std(0),
                                                parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_str),
@@ -2093,6 +2135,7 @@ class WRECK(object):
             try:
                 with open(variables_txt, 'r') as f:
                     variables = filter(lambda st: st, map(lambda st: st.strip(), f.readlines()))
+                    # FIXME: use this data
             except IOError as e:
                 cls.log.error('I/O error trying to read {0} file: {1}'.format(variables_txt, e.message))
         if not cls.config.test_run:
@@ -2207,8 +2250,8 @@ class WRECK(object):
 # DONE: 1. Hijack import of header files, override some resulting data with WRECK values.
 # MOSTLY DONE: 2. Detect module version (M&B or Warband), determining the list of EntityLibraries and methods to use.
 # DONE: 2. Prepare shared globals namespace for module files.
-# MOSTLY DONE: 3. To optimize reference substitution, ALLOW loading ID files, but replace values with WRECK references.
-#                 However these references should be "weak", i.e. they might end up undefined and this should not cause error.
+# DONE: 3. To optimize reference substitution, ALLOW loading ID files, but replace values with WRECK references.
+#          However these references should be "weak", i.e. they might end up undefined and this should not cause error.
 # DONE: 3. Prepare empty namespaces for ID files.
 # DONE: 4. For each module file:
 # DONE: 4.1. Load module source. Compile (?).
@@ -2225,7 +2268,7 @@ class WRECK(object):
 # AFTER SCRIPTS ARE COMPILED 7. Allocate references for global variables and quick strings.
 # DONE: 8. Allocate references for game entities.
 # CANCELLED, WORKFLOW CHANGED 9. Check for any references with undefined value.
-# 10. Run main compilation preprocessor.
+# DONE: 10. Run main compilation preprocessor.
 # 11. For each plugin:
 # 11.1. Run plugin compilation preprocessor if defined (may create code injections).
 # 12. For each entity:
