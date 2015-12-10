@@ -1804,6 +1804,7 @@ class WRECK(object):
         import __builtin__
         _python_import = __builtin__.__import__
         __builtin__.__import__ = _wreck_import_hook
+        sys.modules['compiler'] = imp.new_module('compiler')
 
     @classmethod
     def initialize_config(cls):
@@ -2084,6 +2085,8 @@ class WRECK(object):
 
         cls._module_namespace['WRECK'] = cls
         cls._module_namespace.update(cls._module_overrides)
+
+        sys.modules['compiler'].update(cls._module_namespace)
 
     @classmethod
     def preload_headers(cls):
