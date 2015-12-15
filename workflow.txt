@@ -89,4 +89,65 @@ COMPATIBILITY ISSUES:
   data declaration, so if we could terminate code execution at that point, process all injections and then resume,
   it would be totally cool. So far this seems very unlikely.
 - Extend list for our data libraries, so any modifications will automatically modify values of associated WreckVariable
-  references, so they could be used as list indices immediately and transparently.
+  references, so they could be used as list indices immediately and transparently. This gets rid of evaluating refs!!!
+
+
+POSSIBLE CRITICAL ERRORS DURING COMPILATION:
+
+Init:
++ Missing module_path. No data to read.
++ Failed to auto-resolve an undefined variable in module code.
++ Unknown operation used in WreckVariable expression. Implies broken architecture somewhere.
+- Exhausted stack in current_module() handler. Implies broken architecture somewhere.
+Syntax:
++ Failed to retrieve uid from data tuple. Cannot reliably fallback.
+Compilation:
+- Attempt to retrieve property from dynamic variable. Implies broken code somewhere.
+- Attempt to evaluate property when sanitized data not available. Implies broken architecture somewhere.
+- General error in property evaluation. Implies broken code in property class.
+- Attempt to generate code from static variable/expression or reference. Implies broken architecture somewhere.
+
+POSSIBLE ERRORS DURING COMPILATION:
+
+Init:
++ File module_info.py was not found at module_path.
++ Setting export_path not defined, path does not exist or is not writeable or I/O check failed.
++ File variables.txt exists, but attempt to read resulted in I/O error.
+Syntax:
+- Fatal syntax error in data tuple. Means uid was successfully generated. Fallback to some default value.
+Compilation:
++ Undefined reference. Fallback to zero.
++ Attempt to calculate dynamic expression during compile time. Fallback to zero.
+- Failed to evaluate expression or generate code. Fallback to zero/empty list.
+- Attempt to create a reference when library is not extendable. Should succeed.
+    Exception: if reference is never used, ignore.
+- Illegal call to define_troop_upgrade().
+
+POSSIBLE MISTAKES DURING COMPILATION:
+
+Init:
+Syntax:
+- Data entry contains extra unparsed data. Possible error.
+Compilation:
+
+POSSIBLE WARNINGS DURING COMPILATION:
+
+Init:
++ File module.ini not present at export_path.
+Syntax:
++ Auto-resolve variable reference. Fired if WRECK had to handle NameError during module load.
+    Except: if reference was not defined in ID file, used in code but is defined in ID file by end of compilation.
+Compilation:
+
+TODO:
+- modify all parsers to use fallback data instead of raising WreckParserException.
++ attempt to calculate dynamic expression at compile time should generate error instead of fail.
++ change config validators to use errors instead of exceptions for many situations.
++ get rid of WreckVariable.force_resolution, always fallback.
++ get rid of WreckVariable.is_required, use compile-time checks instead.
+- attempt to generate code from static expression should yield empty list and generate warning, not fail.
++ error in expression calculation should yield zero/empty list and generate error, not fail.
+- attempt to create entry in non-extendable library should succeed and generate error, not fail.
+- failed call to define_troop_upgrade() should cause no effect and generate error, not fail.
++ missing/illegal/etc export path should generate error, not fail.
++ WRECK.resolve_references() should never fail.

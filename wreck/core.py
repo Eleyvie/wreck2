@@ -496,10 +496,10 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                         if not match: raise #WreckException('failed to parse NameError message to identify missing variable', formatted_exception())
                         missing_var = match.groups()[0]
                         correct_var = _parse_reference_by_name(missing_var)
-                        if correct_var is None: raise #WreckException('failed to match undefined variable `{0}` to a module reference'.format(missing_var), formatted_exception())
+                        if correct_var is None: raise WreckException('failed to match undefined variable {0!r} to a module reference'.format(missing_var), formatted_exception())
                         namespace_backup[missing_var] = correct_var
                         WRECK.log.details('%s: auto-resolved variable %s to %r' % (current_module(), missing_var, correct_var))
-                        WRECK.log.warning('had to auto-resolve reference `%s` in %s:%d, please fix to improve compilation speed' % (missing_var, exc_file, exc_line))
+                        WRECK.issues.auto_resolves[missing_var] = correct_var
                         module.__dict__.clear()
                         module.__dict__.update(namespace_backup)
             sys.modules[module_name] = module
@@ -706,7 +706,9 @@ def _parse_tuple(*subparsers):
         except IndexError:
             raise WreckParserException(path + [ofs], 'not enough elements in tuple {0!r}'.format(rec[ofs]))
         if offset < len(rec[ofs]):
-            WRECK.log.warning('extra data at the end of tuple {0!r}'.format(rec[ofs]))
+            WRECK.issues.entity_overflows \
+                .setdefault(argd.get('library')['basename'], {}) \
+                .setdefault(argd.get('uid'), [argd.get('entry')]).append(path + [ofs, offset])
             # TODO: need more elaborate message, use argd
         return result, 1
     return _parser
@@ -835,6 +837,7 @@ class current_module(object):
 current_module = current_module()
 
 
+# TODO: DEPRECATED
 class WreckLogger(object):
 
     messages = None
@@ -887,14 +890,14 @@ class WreckLogger(object):
         return '\n'.join(result)
 
 
-class WreckConfig(object):
+class WreckStorageObject(object):
     """Class to hold WRECK configuration settings.
 
     Essentially, a glorified dictionary. Accepts arbitrary number of values and stores them in objectified format.
     """
 
     def __init__(self, **argd):
-        super(WreckConfig, self).__init__()
+        super(WreckStorageObject, self).__init__()
         self.__dict__.update(argd)
 
     def __setattr__(self, key, value):
@@ -1064,26 +1067,27 @@ class WreckVariable(object):
         try:
             if self.is_expression:
                 if not isinstance(self.operation[0], WreckOperation): raise WreckException('illegal operation %r' % (self.operation[0]))
-                if not self.is_static: raise WreckException('expression %r is not static and cannot be calculated at compile-time' % self)
+                if not self.is_static:
+                    WRECK.issues.failed_evals.append('cannot calculate dynamic expression {0!r} at runtime'.format(self))
+                    self.is_forced = True
+                    return 0
                 try:
                     return self.operation[0](*map(int, self.operation[1:]))
-                except ArithmeticError:
-                    if not self.force_resolution: raise
+                except ArithmeticError as e:
+                    self.is_forced = True
                     for operand in self.operation[1:]:
                         if isinstance(operand, WreckVariable) and operand.is_forced:
-                            self.is_forced = True
                             return 0
-                    raise
+                    WRECK.issues.failed_evals.append('failed to calculate expression {0!r}: {1}'.format(self, e.message))
+                    return 0
             else:
                 if self.value is not None: return self.value
                 name = 'reference' if self.is_static else 'variable'
-                if self.force_resolution:
-                    WRECK.log.error('undefined %s %r, referenced by: %s' % (name, self, self.list_references()))
-                    WRECK.undefined_variables.add(self)
-                    self.is_forced = True
-                    return 0
-                else:
-                    raise WreckException('undefined %s %r, referenced by: %s' % (name, self, self.list_references()))
+                WRECK.issues.undefined_refs[self.formatted_name()] = self
+                #WRECK.log.error('undefined %s %r, referenced by: %s' % (name, self, self.list_references()))
+                #WRECK.undefined_variables.add(self)
+                self.is_forced = True
+                return 0
         except WreckException as e:
             raise WreckException('failed to calculate expression %r' % self, *e.args)
         except Exception as e:
@@ -1745,7 +1749,7 @@ class WRECK(object):
 
     version = '1.1.0'
 
-    config = WreckConfig(
+    config = WreckStorageObject(
         show_help = False,        # Show command line syntax help instead of doing any processing.
         use_color = True,         # Use colored output by default.
         all_tags = False,         # Do not try to imitate Native Warband compiler output by adding entity tags to everything in sight.
@@ -1767,14 +1771,43 @@ class WRECK(object):
 
         performance  = None,
 
-        extras = WreckConfig(), # Any arguments that WRECK failed to parse will be here
+        extras = WreckStorageObject(), # Any arguments that WRECK failed to parse will be here
 
         parse_module_info = True, # If WRECK cannot find module_info.py file, this will be set to False
     )
 
-    current_module = None # TODO: decide what to do with this. Note: it is currently extensively used
+    issues = WreckStorageObject(
+        # ERROR-level issues
+        errors = [],           # one-time errors (mostly from initialization)
+                               # list of plaintext error messages
+        syntax_errors = {},    # syntax error when parsing data tuples when uid has been evaluated
+                               # issues.syntax_errors[libname][uid] = list(entry, path, message)
+        undefined_refs = {},   # undefined references used in module
+                               # issues.undefined_refs[formatted_name] = wreck_variable
+        illegal_refs = {},     # references created from non-extendable libraries; only actual if also in undefined_refs
+                               # issues.illegal_refs[formatted_name] = wreck_variable
+        failed_evals = [],     # errors attempting to evaluate expressions or generate dynamic code
+                               # list of plaintext error messages
+        failed_upgrades = [],  # illegal calls to define_troop_upgrade() function
+                               # list of plaintext error messages
+        # MISTAKE-level issues
+        mistakes = [],         # one-time mistakes (currently none)
+                               # list of plaintext error messages
+        entity_overflows = {}, # tuples with extra unparsed data, possible error
+                               # issues.entity_overflows[libname][uid] = list(entry, path1, path2, ...)
+        duplicate_refs = {},   # entities with duplicate uids
+                               # issues.duplicate_refs[libname][uid] = list of (final_index, entry, from_module, index_in_module)
+        # WARNING-level issues
+        warnings = [],         # one-time warnings (currently only "file module.ini not found")
+                               # list of plaintext error messages
+        auto_resolves = {},    # module-level references WRECK had to divine because of NameError; only actual if not in ID files and not defined by evaluate_references()
+                               # issues.auto_resolves[caught_variable] = resolved_wreck_variable
+        # NOTICE-level issues
+        notifications = [],    # one-time notifications
+                               # list of plaintext error messages
+    )
 
-    libraries = WreckConfig()
+    libraries = WreckStorageObject()
 
     reference_triggers = {} # Filled when importing header_triggers, used to convert trigger condition values back to human-readable strings
     reference_operations = {} # Filled when importing header_operations, used to convert operation codes back to human-readable strings
@@ -1796,7 +1829,7 @@ class WRECK(object):
     plugins = OrderedDict()
     injections = {}
 
-    undefined_variables = set()
+    undefined_variables = set() # TODO: DEPRECATE
 
     @classmethod
     def initialize_wreck(cls):
@@ -1859,15 +1892,17 @@ class WRECK(object):
         """
         if cls.config.module_path is None:
             cls.config.module_path = os.getcwd().rstrip(r'\/').replace('\\', '/')
-        if not os.path.exists(cls.config.module_path):
-            raise WreckException('module path "{0}" does not exist'.format(cls.config.module_path))
+        elif not os.path.exists(cls.config.module_path):
+            cls.config.module_path = os.getcwd().rstrip(r'\/').replace('\\', '/')
+            cls.issues.errors.append('module path "{0}" does not exist'.format(cls.config.module_path))
         if not os.path.exists('/'.join([cls.config.module_path, 'module_info.py'])):
-            cls.log.error('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
+            cls.issues.errors.append('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
             cls.config.parse_module_info = False
         if cls.config.warband_module is None:
             cls.config.warband_module = cls.module_files_exist('module_info_pages.py', 'module_postfx.py')
         if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules:
             cls.config.use_color = False
+            cls.issues.notifications.append('colorama library is missing, disabling colored output')
         sys.path.insert(0, cls.config.module_path)
 
     @classmethod
@@ -2086,7 +2121,7 @@ class WRECK(object):
         cls._module_namespace['WRECK'] = cls
         cls._module_namespace.update(cls._module_overrides)
 
-        sys.modules['compiler'].update(cls._module_namespace)
+        sys.modules['compiler'].__dict__.update(cls._module_namespace)
 
     @classmethod
     def preload_headers(cls):
@@ -2129,31 +2164,46 @@ class WRECK(object):
 
     @classmethod
     def validate_module(cls):
-        if cls.config.export_path is None: raise WreckException('export path not defined by module_info.py or command line options')
-        if not os.path.exists(cls.config.export_path): raise WreckException('export path "{0}" does not exist'.format(cls.config.export_path))
-        module_ini = '/'.join([cls.config.export_path, 'module.ini'])
-        if not os.path.exists(module_ini): cls.log.warning('could not find {0}, are you sure it is correct export destination?'.format(module_ini))
-        variables_txt = cls.config.variables_file.format(module_path = cls.config.module_path, export_path = cls.config.export_path)
-        if os.path.exists(variables_txt):
-            try:
-                with open(variables_txt, 'r') as f:
-                    variables = filter(lambda st: st, map(lambda st: st.strip(), f.readlines()))
-                    # FIXME: use this data
-            except IOError as e:
-                cls.log.error('I/O error trying to read {0} file: {1}'.format(variables_txt, e.message))
-        if not cls.config.test_run:
-            tmp_path = '/'.join([cls.config.export_path, '.tmpwreck'])
-            try:
-                with open(tmp_path, 'w') as f:
-                    f.write('test')
-                with open(tmp_path, 'r') as f:
-                    if f.read() != 'test':
-                        raise IOError('data mismatch, read/write check failed')
-            except IOError as e:
-                cls.log.error('export path is not writeable: %s' % e.message)
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+        if cls.config.export_path is None:
+            cls.issues.errors.append('export path not defined by module_info.py or command line options')
+        if not os.path.exists(cls.config.export_path):
+            cls.issues.errors.append('export path "{0}" does not exist'.format(cls.config.export_path))
+            cls.config.export_path = None
+        if cls.config.export_path is not None:
+            module_ini = '/'.join([cls.config.export_path, 'module.ini'])
+            if not os.path.exists(module_ini):
+                cls.issues.warnings.append('could not find module.ini file at export destination'.format(module_ini))
+            if not cls.config.test_run:
+                tmp_path = '/'.join([cls.config.export_path, '.tmpwreck'])
+                try:
+                    with open(tmp_path, 'w') as f:
+                        f.write('test')
+                    with open(tmp_path, 'r') as f:
+                        if f.read() != 'test':
+                            cls.issues.errors.append('export path "{0}" failed read/write integrity check, export disabled'.format(cls.config.export_path))
+                except IOError as e:
+                    cls.issues.errors.append('cannot write to export path "{0}": {1}'.format(cls.config.export_path, e.message))
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+        try:
+            format_vars = { 'module_path': cls.config.module_path }
+            if cls.config.export_path is not None:
+                format_vars['export_path'] = cls.config.export_path
+            variables_txt = cls.config.variables_file.format(**format_vars)
+        except KeyError:
+            cls.issues.warnings.append('failed to load variables.txt file due to illegal or missing export_path')
+        else:
+            if os.path.exists(variables_txt):
+                try:
+                    with open(variables_txt, 'r') as f:
+                        pass
+                        #variables = filter(lambda st: st, map(lambda st: st.strip(), f.readlines()))
+                        # FIXME: use this data
+                except IOError as e:
+                    cls.issues.errors.append('I/O error trying to read "{0}": {1}'.format(variables_txt, e.message))
+            else:
+                cls.issues.mistakes.append('variables.txt file not found at "{0}"'.format(variables_txt))
 
     @classmethod
     def load_module_data(cls):
@@ -2184,8 +2234,8 @@ class WRECK(object):
                             uid = lib_data.uid_generator(entry, norm_index)
                             parsed = lib_data.parser(lib_data.source, index, library = library, entry = entry, uid = uid)
                             sanitized.append(parsed[0])
-                        except WreckParserException as e:
-                            WRECK.log.error('syntax error in {0} entry #{1} "{2}": {3}\nentry source: {4!r}\npath to error: {5!r}'.format(lib_data.basename, norm_index, uid, e.formatted(), entry, e.error_path))
+                        except Exception, e:
+                            raise WreckException('cannot parse entry #{0} in {1}\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception()))
                         index += 1
                         norm_index += 1
                     lib_data.sanitized = sanitized
