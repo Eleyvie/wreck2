@@ -10,11 +10,8 @@ Email: alex@lomskih.net
 __version__ = "$Revision$"
 # $Source$
 
-import pdb
-
 import sys
 sys.dont_write_bytecode = True
-from pprint import pprint
 from wreck import *
 
 compiler_exit_code = 0
@@ -53,19 +50,11 @@ if __name__ == '__main__':
         print e.formatted()
         exit(1)
 
-    for severity in range(ADVICE):
-        print('SEVERITY {0}:'.format(severity))
-        print(WRECK.log.format_messages(severity))
+    from pprint import pprint
+    pprint(WRECK.issues.__dict__)
     with open('compiler.log', 'w+') as f:
         for severity in range(EVERYTHING):
             f.write('SEVERITY {0}:'.format(severity))
             f.write('\n')
             f.write(WRECK.log.format_messages(severity))
             f.write('\n')
-
-    #print repr(WRECK.libraries.itm['source'][7])
-    #print WRECK.libraries.itm.spice.references
-    #print WRECK.libraries.skl.riding.list_references()
-
-    #pdb.set_trace()
-

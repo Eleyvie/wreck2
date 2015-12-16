@@ -47,7 +47,7 @@ FAILURE  = 1 # An error that prevents the compilation from completing.
 CRITICAL = 0 # An error within WRECK code.
 NOTHING = -1
 
-DEBUG_MODE = True
+DEBUG_MODE = False
 
 bignum = 0x40000000000000000000000000000000
 
@@ -580,63 +580,95 @@ def _uid_strigger(entry, index):
 
 _re_parser_id = re.compile('^[\w\d_]+$', re.IGNORECASE)
 
+class WreckSyntaxErrorHandler(object):
+    depth = 0
+    def __call__(self, path, parse_argd, message, *argl, **argd):
+        if self.depth > 0:
+            raise WreckException()
+        errors = WRECK.issues.syntax_errors.setdefault(parse_argd.get('library')['basename'], {})
+        uid = parse_argd.get('uid')
+        if uid in errors: return
+        errors[uid] = (parse_argd.get('entry'), path, message.format(*argl, **argd))
+    def start_raising(self):
+        self.depth += 1
+    def stop_raising(self):
+        self.depth -= 1
+        if self.depth < 0:
+            raise WreckException('WRECK fatal error: WreckSyntaxError.depth < 0')
+_syntax_error = WreckSyntaxErrorHandler()
+
 def _parse_id(rec, ofs, path = [], **argd):
+    #print '_parse_id for %r in %r' % (path + [ofs], argd.get('uid'))
     if rec[ofs] == 0: return '0', 1
-    if not isinstance(rec[ofs], str): raise WreckParserException(path + [ofs], 'value {0!r} is not a legal identifier'.format(rec[ofs]))
+    if not isinstance(rec[ofs], str):
+        _syntax_error(path + [ofs], argd, 'value {0!r} is not a legal identifier', rec[ofs])
+        return '0', 1
     if _re_parser_id.match(internal_identifier(rec[ofs])): return rec[ofs], 1
-    raise WreckParserException(path + [ofs], 'value `{0}` contains illegal symbols'.format(rec[ofs]))
+    _syntax_error(path + [ofs], argd, 'value `{0}` contains illegal symbols', rec[ofs])
+    fake_id = ''.join(_re_parser_id.findall(internal_identifier(rec[ofs])))
+    if not fake_id: fake_id = '0'
+    return fake_id, 1
 
 def _parse_uid(rec, ofs, path = [], **argd):
-    if not isinstance(rec[ofs], str): raise WreckParserException(path + [ofs], 'value {0!r} is not a legal identifier'.format(rec[ofs]))
+    #print '_parse_uid for %r in %r' % (path + [ofs], argd.get('uid'))
+    if not isinstance(rec[ofs], str):
+        _syntax_error(path + [ofs], argd, 'value {0!r} is not a legal identifier', rec[ofs])
+        return argd.get('uid'), 1
     if _re_parser_id.match(internal_identifier(rec[ofs])): return rec[ofs], 1
-    raise WreckParserException(path + [ofs], 'value `{0}` contains illegal symbols'.format(rec[ofs]))
+    _syntax_error(path + [ofs], argd, 'value `{0}` contains illegal symbols', rec[ofs])
+    fake_id = ''.join(_re_parser_id.findall(internal_identifier(rec[ofs])))
+    if not fake_id: fake_id = argd.get('uid')
+    return fake_id, 1
 
 def _parse_int(rec, ofs, path = [], **argd):
+    #print '_parse_int for %r in %r' % (path + [ofs], argd.get('uid'))
     if isinstance(rec[ofs], int): return rec[ofs], 1
     if isinstance(rec[ofs], long): return rec[ofs], 1
-    if isinstance(rec[ofs], WreckVariable):
-        if not rec[ofs].is_static:
-            raise WreckParserException(path + [ofs], 'value of variable {0!r} cannot be determined at compile time'.format(rec[ofs]))
-        value = rec[ofs]
-    else:
-        value = None
-        if isinstance(rec[ofs], str): value = _parse_reference_by_name(rec[ofs])
+    value = rec[ofs]
+    if not isinstance(value, WreckVariable):
+        if not isinstance(value, str):
+            _syntax_error(path + [ofs], argd, 'value {0!r} is not a valid integer or reference', value)
+            return 0, 1
+        value = _parse_reference_by_name(value)
         if value is None:
-            try:
-                value = int(rec[ofs])
-            except Exception:
-                raise WreckParserException(path + [ofs], 'cannot convert {0!r} to integer'.format(rec[ofs]))
+            _syntax_error(path + [ofs], argd, 'cannot convert {0!r} to integer', rec[ofs])
+            return 0, 1
+    if not value.is_static:
+        _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', value)
+        return 0, 1
     return value, 1
 
 def _parse_float(rec, ofs, path = [], **argd):
+    #print '_parse_float for %r in %r' % (path + [ofs], argd.get('uid'))
     if isinstance(rec[ofs], WreckVariable):
         if not rec[ofs].is_static:
-            raise WreckParserException(path + [ofs], 'value of variable {0!r} cannot be determined at compile time'.format(rec[ofs]))
+            _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', rec[ofs])
+            return 0.0, 1
         value = rec[ofs]
     else:
         try:
             value = float(rec[ofs])
         except Exception:
-            raise WreckParserException(path + [ofs], 'cannot convert {0!r} to float'.format(rec[ofs]))
+            _syntax_error(path + [ofs], argd, 'cannot convert {0!r} to float', rec[ofs])
     return value, 1
 
 def _parse_str(rec, ofs, path = [], **argd):
-    if isinstance(rec[ofs], WreckVariable):
-        if not rec[ofs].is_static:
-            raise WreckParserException(path + [ofs], 'value of variable {0!r} cannot be determined at compile time'.format(rec[ofs]))
-        value = rec[ofs]
-    else:
-        try:
-            value = str(rec[ofs])
-        except Exception:
-            raise WreckParserException(path + [ofs], 'cannot convert {0!r} to string'.format(rec[ofs]))
+    #print '_parse_str for %r in %r' % (path + [ofs], argd.get('uid'))
+    try:
+        value = str(rec[ofs])
+    except Exception:
+        _syntax_error(path + [ofs], argd, 'cannot convert {0!r} to string', rec[ofs])
+        return '_', 1
     if value == '': value = '_'
     return value, 1
 
 def _parse_ref(lib_name):
-    def _parser(rec, ofs, path = [], **argd): # lib, base_entry, index, uid, path
+    def _ref_parser(rec, ofs, path = [], **argd): # lib, base_entry, index, uid, path
+        #print '_parse_ref for %r in %r' % (path + [ofs], argd.get('uid'))
         library = getattr(WRECK.libraries, lib_name, None)
-        if not library: raise WreckException('illegal library {0!r} in _parse_ref definition'.format(lib_name))
+        if not library:
+            _syntax_error(path + [ofs], argd, 'illegal library {0!r} in _parse_ref definition', lib_name)
+            return 0, 1
         if isinstance(rec[ofs], WreckVariable): return rec[ofs], 1
         if isinstance(rec[ofs], str):
             prefix = library['prefix']
@@ -645,18 +677,21 @@ def _parse_ref(lib_name):
             else:
                 return library(rec[ofs]), 1
         if isinstance(rec[ofs], int): return rec[ofs], 1
-        raise WreckParserException(path + [ofs], 'cannot parse `{0}` as `{1}`'.format(rec[ofs], library['basename']))
-    return _parser
+        _syntax_error(path + [ofs], argd, 'cannot parse `{0}` as `{1}`', rec[ofs], library['basename'])
+        return 0, 1
+    return _ref_parser
 
 def _parse_script(name_template, conversions = None, check_canfail = False):
-    def _parser(rec, ofs, path = [], **argd):
+    def _script_parser(rec, ofs, path = [], **argd):
+        #print '_parse_script for %r in %r' % (path + [ofs], argd.get('uid'))
         if isinstance(rec[ofs], tuple): rec[ofs] = list(rec[ofs])
         if not isinstance(rec[ofs], list):
-            raise WreckParserException(path + [ofs], 'this is not a script: {0!r}'.format(rec[ofs]))
+            _syntax_error(path + [ofs], argd, 'this is not a script: {0!r}', rec[ofs])
+            return [], 1
         result = list(rec[ofs]) # We leave rec[ofs] in source, but pass result to sanitized
         WRECK.scripting_blocks.append(WreckScript(name_template, rec[ofs], result, argd.get('entry'), path + [ofs], argd.get('library'), argd.get('uid'), conversions, check_canfail))
         return result, 1
-    return _parser
+    return _script_parser
 
 def _validate_subparser(subparser):
     if isinstance(subparser, tuple): return _parse_tuple(*subparser)
@@ -665,35 +700,46 @@ def _validate_subparser(subparser):
 
 def _optional(subparser, default):
     subparser = _validate_subparser(subparser)
-    def _parser(rec, ofs, path = [], **argd):
+    def _optional_parser(rec, ofs, path = [], **argd):
+        #print '_parse_optional for %r in %r' % (path + [ofs], argd.get('uid'))
+        _syntax_error.start_raising()
         try:
-            return subparser(rec, ofs, path, **argd)
-        except WreckParserException:
-            return default, 0
+            result = subparser(rec, ofs, path, **argd)
+        except WreckException:
+            result = default, 0
         except IndexError:
-            return default, 0
-    return _parser
+            result = default, 0
+        _syntax_error.stop_raising()
+        return result
+    return _optional_parser
 
 def _repeatable(subparser):
     subparser = _validate_subparser(subparser)
-    def _parser(rec, ofs, path = [], **argd):
+    def _repeatable_parser(rec, ofs, path = [], **argd):
+        #print '_repeatable for %r in %r' % (path + [ofs], argd.get('uid'))
         added = 0
         result = []
+        _syntax_error.start_raising()
         try:
             while True:
                 value, steps = subparser(rec, ofs + added, path, **argd)
                 result.append(value)
                 added += steps
-        except WreckParserException: pass
-        except IndexError: pass
+        except (WreckException, IndexError):
+            pass
+        _syntax_error.stop_raising()
+        #print '_repeatable complete'
         return result, added
-    return _parser
+    return _repeatable_parser
 
 def _parse_tuple(*subparsers):
     subparsers = map(_validate_subparser, subparsers)
-    def _parser(rec, ofs, path = [], **argd):
+    def _tuple_parser(rec, ofs, path = [], **argd):
+        #print '_parse_tuple for %r in %r' % (path + [ofs], argd.get('uid'))
         if isinstance(rec[ofs], tuple): rec[ofs] = list(rec[ofs])
-        if not isinstance(rec[ofs], list): raise WreckParserException(path + [ofs], 'expected tuple, received {0!r}'.format(rec[ofs]))
+        if not isinstance(rec[ofs], list):
+            _syntax_error(path + [ofs], argd, 'expected tuple, received {0!r}', rec[ofs])
+            rec[ofs] = [0] * len(subparsers)
         subentry = rec[ofs]
         subpath = path + [ofs]
         offset = 0
@@ -704,49 +750,57 @@ def _parse_tuple(*subparsers):
                 result.append(value)
                 offset += steps
         except IndexError:
-            raise WreckParserException(path + [ofs], 'not enough elements in tuple {0!r}'.format(rec[ofs]))
+            _syntax_error(path + [ofs], argd, 'not enough elements in tuple {0!r}', tuple(rec[ofs]))
+            subentry.append(0)
         if offset < len(rec[ofs]):
             WRECK.issues.entity_overflows \
                 .setdefault(argd.get('library')['basename'], {}) \
                 .setdefault(argd.get('uid'), [argd.get('entry')]).append(path + [ofs, offset])
-            # TODO: need more elaborate message, use argd
         return result, 1
-    return _parser
+    return _tuple_parser
 
 def _parse_list(subparser):
     subparser = _validate_subparser(subparser)
     repeatable_subparser = _repeatable(subparser)
-    def _parser(rec, ofs, path = [], **argd):
+    def _list_parser(rec, ofs, path = [], **argd):
+        #print '_parse_list for %r in %r' % (path + [ofs], argd.get('uid'))
         if isinstance(rec[ofs], tuple): rec[ofs] = list(rec[ofs])
-        if not isinstance(rec[ofs], list): raise WreckParserException(path + [ofs], 'expected list, received {0!r}'.format(rec[ofs]))
+        if not isinstance(rec[ofs], list):
+            _syntax_error(path + [ofs], argd, 'expected list, received {0!r}', rec[ofs])
+            rec[ofs] = []
         result, steps = repeatable_subparser(rec[ofs], 0, path + [ofs], **argd)
         if steps < len(rec[ofs]):
             # We failed at some step before the end of list, so try again since _repeatable has suppressed any exception
-            failure = subparser(rec[ofs], steps, path + [ofs], **argd)
-            # Previous line should have thrown a WreckParserException, but if it didn't, it's a major mistake by itself
-            raise WreckException('_parse_list() parser failed', 'call parameters: rec = %r, ofs = %d, path = %r, argd = %r\n_repeatable returned result = %r, steps = %r\nlen(rec[ofs]) = %d, hence called subparser\ncall parameters: rec = %r, ofs = %d, path = %r, argd\nsubparser returned %r instead of throwing exception' % (rec, ofs, path, argd, result, steps, len(rec[ofs]), rec[ofs], steps, path + [ofs], failure))
+            subparser(rec[ofs], steps, path + [ofs], **argd)
+            # Previous line should have added an error message, but in case it didn't, we're adding another
+            _syntax_error(path + [ofs], argd, '_parse_list() parser failed for {0!r}: {1} element(s), but only {2} parsed', rec[ofs], len(rec[ofs]), steps)
         return result, 1
-    return _parser
+    return _list_parser
 
 def _parse_expect(value):
-    def _parser(rec, ofs, path = [], **argd):
-        if rec[ofs] != value: raise WreckParserException(path + [ofs], 'value {0!r} found, {1!r} expected'.format(rec[ofs], value))
-        return rec[ofs], 1
-    return _parser
+    def _expect_parser(rec, ofs, path = [], **argd):
+        #print '_parse_expect for %r in %r' % (path + [ofs], argd.get('uid'))
+        if rec[ofs] != value:
+            _syntax_error(path + [ofs], argd, 'value {0!r} found, {1!r} expected', rec[ofs], value)
+        return value, 1
+    return _expect_parser
 
-def _parse_aggregate(unpack):
-    def _parser(rec, ofs, path = [], **argd):
+def _parse_aggregate(unpack_function):
+    def _aggregate_parser(rec, ofs, path = [], **argd):
+        #print '_parse_aggregate for %r in %r' % (path + [ofs], argd.get('uid'))
         if isinstance(rec[ofs], WreckAggregateValue): return rec[ofs], 1
         try:
-            return unpack(rec[ofs]), 1
+            return unpack_function(rec[ofs]), 1
         except Exception:
-            raise WreckParserException(path + [ofs], 'failed to unpack value {0!r} as aggregate'.format(rec[ofs]))
-    return _parser
+            _syntax_error(path + [ofs], argd, 'failed to unpack value {0!r} as aggregate', rec[ofs])
+            return unpack_function(0), 1
+    return _aggregate_parser
 
 def _parse_file(*lookups):
     return _parse_str # TODO: implement proper filename check, maybe with folder reference so WRECK could check for file's presence
 
 def _parse_intpair(rec, ofs, path = [], **argd):
+    #print '_parse_intpair for %r in %r' % (path + [ofs], argd.get('uid'))
     if isinstance(rec[ofs], tuple): rec[ofs] = list(rec[ofs])
     if isinstance(rec[ofs], list): return _parse_tuple(_parse_int, _parse_int)(rec, ofs, path, **argd)
     value, steps = _parse_int(rec, ofs, path, **argd)
@@ -837,7 +891,7 @@ class current_module(object):
 current_module = current_module()
 
 
-# TODO: DEPRECATED
+# TODO: DEPRECATE
 class WreckLogger(object):
 
     messages = None
@@ -1066,7 +1120,8 @@ class WreckVariable(object):
     def __int__(self):
         try:
             if self.is_expression:
-                if not isinstance(self.operation[0], WreckOperation): raise WreckException('illegal operation %r' % (self.operation[0]))
+                if not isinstance(self.operation[0], WreckOperation):
+                    raise WreckException('illegal operation %r' % (self.operation[0]))
                 if not self.is_static:
                     WRECK.issues.failed_evals.append('cannot calculate dynamic expression {0!r} at runtime'.format(self))
                     self.is_forced = True
@@ -1133,7 +1188,9 @@ class WreckVariable(object):
 
     def __call__(self, script_name, destination, local_depth = 0):
         if not self.is_expression: raise WreckException('attempt to generate code from static reference %r' % self)
-        if self.is_static: raise WreckException('attempt to generate code from static expression %r' % self)
+        if self.is_static:
+            WRECK.issues.failed_evals.append('attempt to generate code from static expression {0!r}'.format(self))
+            return 0, []
         try:
             total_commands = 0 # Usually an expression will generate one command
             code = [] # Resulting Warband code (already compiled)
@@ -1507,11 +1564,11 @@ class WreckLibrary(object):
         """Supports ``itm.sword`` syntax in module files and plugins. Intended primarily for module files."""
         if name in self.__data.entries:
             variable = self.__data.entries[name]
-        elif not self.__data.extendable:
-            raise WreckException('illegal reference `%s.%s`' % (self.__data.basename, name))
         else:
             self.__data.entries[name] = variable = self.__data.varclass(module = self, name = name, **self.__data.defaults)
             self.__data.unassigned.add(name)
+            if not self.__data.extendable:
+                WRECK.issues.illegal_refs[variable.formatted_name()] = variable
         variable.add_reference(reference)
         return variable
 
@@ -1522,10 +1579,10 @@ class WreckLibrary(object):
         """To be called in WRECK own code mostly, and possibly in more complex plugins."""
         if name in self.__data.entries:
             self.__data.entries[name].value = value
-        elif not self.__data.extendable:
-            raise WreckException('illegal reference `%s.%s`' % (self.__data.basename, name))
         else:
-            self.__data.entries[name] = self.__data.varclass(module = self, name = name, value = value, **self.__data.defaults)
+            self.__data.entries[name] = variable = self.__data.varclass(module = self, name = name, value = value, **self.__data.defaults)
+            if not self.__data.extendable:
+                WRECK.issues.illegal_refs[variable.formatted_name()] = variable
         if name in self.__data.unassigned: self.__data.unassigned.remove(name)
 
     def __enter__(self):
@@ -1536,7 +1593,7 @@ class WreckLibrary(object):
 
     def __getitem__(self, key):
         """Internal data fields of WreckLibrary can be accessed through dict-like syntax (we cannot use object syntax since it's used by entity references)."""
-        # TODO: integer key should retrieve a reference from the library once sanitized array is ready
+        # TODO: integer key should retrieve a reference from the library once sanitized array is ready (and maybe even before)
         return getattr(self.__data, key)
 
     def __setitem__(self, key, value):
@@ -1661,7 +1718,7 @@ def define_troop_upgrade(*argl):
         base = args[0]
         upg1 = args[1]
     except IndexError:
-        raise WreckException('function call error in {2} at {0}:{1} - not enough arguments'.format(*stack[1]), stack[1][3].strip())
+        WRECK.issues.failed_upgrades.append('illegal troop upgrade in {2} at {0}:{1} - not enough arguments'.format(*stack[1]))
     try:
         upg2 = args[2] # Optional
     except IndexError:
@@ -1828,8 +1885,6 @@ class WRECK(object):
 
     plugins = OrderedDict()
     injections = {}
-
-    undefined_variables = set() # TODO: DEPRECATE
 
     @classmethod
     def initialize_wreck(cls):
@@ -2232,10 +2287,15 @@ class WRECK(object):
                             continue
                         try:
                             uid = lib_data.uid_generator(entry, norm_index)
+                        except Exception:
+                            raise WreckException('cannot parse entry #{0} in {1}\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception()))
+                        try:
                             parsed = lib_data.parser(lib_data.source, index, library = library, entry = entry, uid = uid)
                             sanitized.append(parsed[0])
-                        except Exception, e:
-                            raise WreckException('cannot parse entry #{0} in {1}\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception()))
+                        except WreckException as e:
+                            raise WreckException('cannot parse entry {1}.{4} (#{0})\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception(), uid), *e.args)
+                        except Exception:
+                            raise WreckException('cannot parse entry {1}.{4} (#{0})\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception(), uid), formatted_exception())
                         index += 1
                         norm_index += 1
                     lib_data.sanitized = sanitized
@@ -2282,7 +2342,7 @@ class WRECK(object):
 #   +------------------------------------------------------------------------+
 # endregion
 
-# ??? TODO: variable forced resolution
+# DONE: variable forced resolution
 
 # DONE: use WreckModule (current_module())
 # DONE: add detail to _parse_script, collect data blocks to be parsed
