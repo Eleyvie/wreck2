@@ -52,7 +52,7 @@ WRECK WORKFLOW
     + handle module-level injections during parsing
     - any syntax errors generated during parsing must correctly trace the origin of data entry (i.e. if it was present
       in the original module file, added by plugin or injected by plugin)
-    - for as long as entry uid has been identified, syntax errors should not terminate compiler, instead error messages must be generated
+    + for as long as entry uid has been identified, syntax errors should not terminate compiler, instead error messages must be generated
     - messages about syntax errors must include highlighting of actual error with color (`path` variable is used)
 * Resolve references:
     + finalize entry lists - from this moment no entries can be deleted, added or inserted

@@ -19,6 +19,7 @@ import sys
 import imp
 import re
 import time
+import logging
 from collections import OrderedDict
 try: import colorama
 except ImportError: pass
@@ -35,17 +36,14 @@ except ImportError: pass
 _python_import = None
 
 
-EVERYTHING = 9
-DEBUG    = 8 # Technical message about compiler's internal proceedings.
-DETAILS  = 7 # Informational message about minor events during compilation. Everything is ok.
-INFO     = 6 # General informational message. Everything is ok.
-ADVICE   = 5 # Not an error, but WRECK still advises to change something to improve readability, portability etc.
-WARNING  = 4 # Not necessarily an error, but has the potential to become such.
-MISTAKE  = 3 # Most likely an error unless it's some trickery that WRECK cannot recognize. Module is still compilable.
-ERROR    = 2 # An error that makes it impossible to compile the module, but doesn't stop the compilation.
-FAILURE  = 1 # An error that prevents the compilation from completing.
-CRITICAL = 0 # An error within WRECK code.
-NOTHING = -1
+ERROR   = 4
+MISTAKE = 3
+WARNING = 2
+ADVICE  = 1
+NOTICE  = 0
+
+EVERYTHING = NOTICE
+NOTHING    = ERROR + 1
 
 DEBUG_MODE = False
 
@@ -200,9 +198,10 @@ For paths that include spaces, put those paths in double quotes, for example:
 def _get_current_stack():
     return map(lambda i: (i[1], i[2], i[3], i[4][0]), inspect.stack())[1:]
 
-# Generic class which is used to quietly replace some pipe-joined lists in the game (particularly, item property list and troop attribute/skill/proficiency lists)
+
 class WreckAggregateValue(dict):
-    """A wrapper class for some combined values in Warband modules.
+    """
+    A wrapper class for some combined values in Warband modules.
 
     This class is used to handle various pipe-connected parameter lists in Warband module files, like item properties
     and troop attribute/skill/proficiencies. Vanilla Warband compile combines those parameters into a single value with
@@ -353,7 +352,7 @@ def _import_sanitize_module_constants(data):
             new_value = _parse_reference_by_name(value)
             if new_value is not None:
                 data[key] = new_value
-                WRECK.log.details('%s.%s: replaced %r with %r' % (current_module(), key, value, new_value))
+                WRECK.log('replaced value: %s = %r (was %r)' % (key, new_value, value))
 
 def _import_sanitize_references(data, *libraries):
     for library in libraries:
@@ -364,7 +363,7 @@ def _import_sanitize_references(data, *libraries):
             for key, value in data.iteritems():
                 if key.startswith(prefix) and (type(value) in {int, long}):
                     data[key] = getattr(library, key[len(prefix):])
-                    WRECK.log.details('%s.%s: replaced %r with %r' % (current_module(), key, value, data[key]))
+                    WRECK.log('replaced value: %s = %r (was %r)' % (key, data[key], value))
             library_data.defaults = old_defaults
 
 def _import_sanitize_overrides(data):
@@ -372,17 +371,17 @@ def _import_sanitize_overrides(data):
     allkeys = data.keys()
     for key in allkeys:
         if (key in WRECK._module_overrides) and (data[key] != WRECK._module_overrides[key]):
-            WRECK.log.details('%s: restored value of WRECK-tracked %s (type %s)' % (current_module(), key, type(WRECK._module_overrides[key]).__name__))
+            WRECK.log('value conflict for %r: %s.%s = %r, WRECK.%s = %r: using WRECK value' % (key, current_module(), key, data[key], key, WRECK._module_overrides[key]))
             data[key] = WRECK._module_overrides[key]
         elif (key == 'pos_belfry_begin') and not isinstance(data[key], WreckVariable):
             WRECK._module_namespace[key] = data[key] = getattr(WRECK.libraries._posreg, 'pos%d' % int(data[key]))
-            WRECK.log.details('%s: updated %s value' % (current_module(), key))
+            WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
         elif (key == 'def_attrib') and not isinstance(data[key], WreckAggregateValue):
             WRECK._module_namespace[key] = data[key] = unparse_attr_aggregate(data[key])
-            WRECK.log.details('%s: updated %s value' % (current_module(), key))
+            WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
         elif (key == 'num_weapon_proficiencies'):
             WRECK.num_weapon_proficiencies = WRECK._module_namespace[key] = data[key]
-            WRECK.log.details('%s: updated %s value' % (current_module(), key))
+            WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
 
 def _import_sanitize_header_skills(data):
     global WRECK, re
@@ -395,7 +394,7 @@ def _import_sanitize_header_skills(data):
             match = parser.match(key)
             if match:
                 data[key] = int(match.groups()[1]) << (getattr(WRECK.libraries.skl, match.groups()[0]) << 2)
-                WRECK.log.details('%s.%s: replaced %r with %r' % (current_module(), key, value, data[key]))
+                WRECK.log('replaced value: %s = %r (was %r)' % (key, data[key], value))
         library_data.defaults = old_defaults
 
 def _import_sanitize_header_operations(data):
@@ -406,18 +405,22 @@ def _import_sanitize_header_operations(data):
     for opname in check_lhs:
         if (opname in data) and (opname not in data['lhs_operations']):
             data['lhs_operations'].append(data[opname])
-            WRECK.log.details('%s: added operation %s to lhs_operations list' % (current_module(), opname))
+            WRECK.log('added missing operation %s to lhs_operations list', opname)
     if 'depth_operations' not in data:
         data['depth_operations'] = []
-        WRECK.log.details('%s: added depth_operations list' % current_module())
+        WRECK.log('added depth_operations list to header_operations module')
     for opname in check_depth:
         if (opname in data) and (opname not in data['depth_operations']):
             data['depth_operations'].append(data[opname])
-            WRECK.log.details('%s: added operation %s to depth_operations list' % (current_module(), opname))
+            WRECK.log('added missing operation %s to depth_operations list', opname)
+    #neg_value = data.get('neg', 0x80000000)
+    #this_or_next_value = data.get('this_or_next', 0x40000000)
+    # TODO: handle neg and this_or_next values (need to keep track of them)
     for opname, opcode in data.iteritems():
         if type(opcode) == int:
             WRECK.reference_operations[opcode] = opname
             setattr(WRECK.libraries._opcode, opname, opcode)
+            WRECK.log('replaced value: %s = %r (was %r)', opname, getattr(WRECK.libraries._opcode, opname), opcode)
 
 def _import_sanitize_header_triggers(data):
     for key, value in data.iteritems():
@@ -430,6 +433,7 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
     # Check for already loaded modules
     if module_name in sys.modules:
         #print 'IMPORT: %s already loaded, using cache' % module_name
+        WRECK.log('importing module %s from cache', module_name)
         return sys.modules[module_name]
     # Change import context
     bottom_name = module_name.split('.')[-1]
@@ -440,19 +444,22 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
         try:
             mfile, mpath, mdesc = imp.find_module(module_name)
             #print 'IMPORT: working on %s: %r, %r, %r' % (module_name, mfile, mpath, mdesc)
-            if os.path.abspath(mpath).startswith(os.path.abspath(WRECK.config.module_path)):
+            if mfile and os.path.abspath(mpath).startswith(os.path.abspath(WRECK.config.module_path)):
                 module_code = mfile.read()
                 match = _detect_file_encoding.search(module_code[:200])
                 if match:
                     module_code = module_code.replace(match.groups()[0], '...', 1) # Disable encoding tag
+                    WRECK.log('deactivated encoding tag %r in module %s (workaround for Python compile()/exec() issue)', match.groups()[0], module_name)
         finally:
             if isinstance(mfile, file): mfile.close()
         # Process module
         if module_code:
+            WRECK.log('importing module %s with WRECK import hook', module_name)
             module = imp.new_module(module_name)
             module.__dict__['__file__'] = mpath
             if bottom_name.startswith('ID_') or bottom_name.startswith('header_') or bottom_name.startswith('process_') or bottom_name in ('module_constants'):
                 #print 'IMPORT: %s is auxilliary module file, using simple exec' % module_name
+                WRECK.log('module %s identified as auxilliary file, using simplified import', module_name)
                 exec(module_code, module.__dict__)
                 # Sanitize
                 if bottom_name.startswith('ID_'):
@@ -462,50 +469,71 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                         if not library['prefix']: continue
                         if bottom_name == ''.join(['ID_', library['module']]):
                             libraries.append(library)
-                    _import_sanitize_references(module.__dict__, *libraries)
+                    if libraries:
+                        WRECK.log('processing %s as ID container', module_name)
+                        _import_sanitize_references(module.__dict__, *libraries)
                 elif bottom_name == 'module_constants':
+                    WRECK.log('processing as module_constants file')
                     _import_sanitize_module_constants(module.__dict__)
                 elif bottom_name == 'header_operations':
+                    WRECK.log('processing as header_operations file')
                     _import_sanitize_header_operations(module.__dict__)
                 elif bottom_name == 'header_skills':
+                    WRECK.log('processing as header_skills file')
                     _import_sanitize_references(module.__dict__, WRECK.libraries.skl)
                     _import_sanitize_header_skills(module.__dict__)
                 elif bottom_name == 'header_item_modifiers':
+                    WRECK.log('processing as header_item_modifiers file')
                     _import_sanitize_references(module.__dict__, WRECK.libraries.imod, WRECK.libraries.imodbit)
                 elif bottom_name == 'header_triggers':
+                    WRECK.log('processing as header_triggers file')
                     _import_sanitize_header_triggers(module.__dict__)
                 elif bottom_name.startswith('header_'):
+                    WRECK.log('processing %s as module header file', module_name)
                     _import_sanitize_overrides(module.__dict__)
                 # Extend module namespace if it was a header or ID file
-                if not bottom_name.startswith('process_'):
+                if bottom_name.startswith('process_'):
+                    WRECK.log('module %s successfully imported', module_name)
+                else:
+                    WRECK.log('module %s successfully imported, updating shared module namespace', module_name)
                     WRECK._module_namespace.update(i for i in module.__dict__.iteritems() if not i[0].startswith('__'))
             else:
+                WRECK.log('module %s identified as primary module file, using wrapped import', module_name)
+                WRECK.log('pre-populating %s namespace with values from shared module namespace', module_name)
                 module.__dict__.update(WRECK._module_namespace)
-                #print 'IMPORT: %s is proper module file, using dynamic namespace: %r' % (module_name, module.__dict__.keys())
                 namespace_backup = dict(module.__dict__)
                 successful = False
+                WRECK.log('compiling module %s for faster execution', module_name)
                 module_bytecode = compile(module_code, mpath, 'exec')
+                WRECK.log('module %s successfully compiled to bytecode', module_name)
                 while not successful:
                     try:
-                        #print 'IMPORT: execcing...'
+                        WRECK.log('executing compiled module %s', module_name)
                         exec(module_bytecode, module.__dict__)
                         successful = True
                     except NameError as e:
                         exc_file, exc_line, exc_func, exc_text = _get_exception_details()
                         match = _detect_missing_var_name.match(e.message)
-                        if not match: raise #WreckException('failed to parse NameError message to identify missing variable', formatted_exception())
+                        if not match:
+                            WRECK.log('unprocessable NameError in imported module %s:\n%s', module_name, formatted_exception())
+                            raise #WreckException('failed to parse NameError message to identify missing variable', formatted_exception())
                         missing_var = match.groups()[0]
                         correct_var = _parse_reference_by_name(missing_var)
-                        if correct_var is None: raise WreckException('failed to match undefined variable {0!r} to a module reference'.format(missing_var), formatted_exception())
+                        if correct_var is None:
+                            WRECK.log('NameError for reference %r detected in module %s, failed to parse as module reference:\n%s', missing_var, module_name, formatted_exception())
+                            raise WreckException('failed to match undefined variable {0!r} to a module reference'.format(missing_var), formatted_exception())
                         namespace_backup[missing_var] = correct_var
-                        WRECK.log.details('%s: auto-resolved variable %s to %r' % (current_module(), missing_var, correct_var))
+                        WRECK.log('undefined value %r in module %s tentatively resolved as %r' % (missing_var, module_name, correct_var))
                         WRECK.issues.auto_resolves[missing_var] = correct_var
                         module.__dict__.clear()
                         module.__dict__.update(namespace_backup)
+                        WRECK.log('restored %s namespace to original condition, module ready for another execution attempt', module_name)
+                WRECK.log('module %s successfully imported')
             sys.modules[module_name] = module
         else:
             if gvars is None: gvars = imp.new_module(module_name).__dict__
             if lvars is None: lvars = gvars
+            WRECK.log('importing module %s with default import method', module_name)
             module = _python_import(module_name, gvars, lvars, fromlist, level)
     return module
 
@@ -516,6 +544,7 @@ def _import_sanitize_plugin(data):
     pass
 
 def register_plugin(name = None, glob = None):
+    # FIXME: implement register_plugin()
     if WRECK.register_plugins:
         # If this is the first run for our plugin, we interrupt it's execution with a custom exception.
         # This exception will be caught by our import hook and plugin will be stored for later.
@@ -524,16 +553,20 @@ def register_plugin(name = None, glob = None):
         raise WreckInterruptPlugin(stack[1][2])
 
 def require_plugin(*req_list):
+    # FIXME: implement require_plugin()
     pass
 
 def export_plugin_globals(**exported):
+    # FIXME: implement export_plugin_globals()
     pass
 
 def extend_syntax(callback):
+    # FIXME: implement extend_syntax()
     pass
 
 
 def _collect_injections(point, source = None):
+    # FIXME: implement collect_injections()
     # Check if we need sourced list or not
     if source is not None:
         copy_list = lambda data, source: [WreckSourcedList(data[index], source, index) for index in xrange(len(data))]
@@ -556,6 +589,7 @@ def _collect_injections(point, source = None):
 def inject(name, prefix = None, separator = None, suffix = None, empty = None):
     return WreckInjectionPoint(name, prefix, separator, suffix, empty)
 
+
 def _uid_std(offset):
     def _retrieve_uid(entry, index):
         return entry[offset]
@@ -571,16 +605,16 @@ def _uid_trigger(entry, index):
     if int(entry[0]) in WRECK.reference_triggers: timer = WRECK.reference_triggers[int(entry[0])]
     else: timer = '{0:.2f}'.format(entry[0])
     repeat = 'ti_once' if entry[2] == 100000000.0 else '{0:.2f}'.format(entry[2])
-    return 'trigger({1},{2:.2f},{3})'.format(index, timer, entry[1], repeat)
+    return '#{0}_i_{1}_d_{2:.2f}_ra_{3}'.format(index, timer, entry[1], repeat)
 
 def _uid_strigger(entry, index):
     if int(entry[0]) in WRECK.reference_triggers: timer = WRECK.reference_triggers[int(entry[0])]
     else: timer = '{0:.2f}'.format(entry[0])
-    return 'simple_trigger({1})'.format(index, timer)
+    return '#{0}_i_{1}_sec'.format(index, timer)
 
 _re_parser_id = re.compile('^[\w\d_]+$', re.IGNORECASE)
 
-class WreckSyntaxErrorHandler(object):
+class _WreckSyntaxErrorHandler(object):
     depth = 0
     def __call__(self, path, parse_argd, message, *argl, **argd):
         if self.depth > 0:
@@ -595,7 +629,9 @@ class WreckSyntaxErrorHandler(object):
         self.depth -= 1
         if self.depth < 0:
             raise WreckException('WRECK fatal error: WreckSyntaxError.depth < 0')
-_syntax_error = WreckSyntaxErrorHandler()
+
+_syntax_error = _WreckSyntaxErrorHandler()
+
 
 def _parse_id(rec, ofs, path = [], **argd):
     #print '_parse_id for %r in %r' % (path + [ofs], argd.get('uid'))
@@ -866,11 +902,16 @@ class current_module(object):
     def __call__(self, module_name = None):
         if module_name is None: return self.name
         self.__stack.append(module_name)
+        WRECK.log = logging.getLogger(self.full_name).debug
         return self
 
     @property
     def name(self):
         return self.__stack[-1] if self.__stack else None
+
+    @property
+    def full_name(self):
+        return '.'.join(self.__stack) if self.__stack else 'WRECK'
 
     @property
     def stack(self):
@@ -884,64 +925,12 @@ class current_module(object):
     def exit(self, exc_type = None, exc_value = None, tb = None):
         if not self.__stack: raise WreckException('cannot leave current execution context: top of the stack already')
         self.__stack.pop()
+        WRECK.log = logging.getLogger(self.full_name).debug
         return self.name
 
     __exit__ = exit
 
 current_module = current_module()
-
-
-# TODO: DEPRECATE
-class WreckLogger(object):
-
-    messages = None
-
-    def __init__(self):
-        self.messages = {}
-
-    def add_message(self, severity, message):
-        if severity not in self.messages: self.messages[severity] = []
-        if not isinstance(message, list): message = [message]
-        self.messages[severity].append((time.time(), message))
-
-    def debug(self, message):
-        self.add_message(DEBUG, message)
-    def details(self, message):
-        self.add_message(DETAILS, message)
-    def info(self, message):
-        self.add_message(INFO, message)
-    def advice(self, message):
-        self.add_message(ADVICE, message)
-    def warning(self, message):
-        self.add_message(WARNING, message)
-    def mistake(self, message):
-        self.add_message(MISTAKE, message)
-    def error(self, message):
-        self.add_message(ERROR, message)
-    def failure(self, message):
-        self.add_message(FAILURE, message)
-    def critical(self, message):
-        self.add_message(CRITICAL, message)
-
-    def get_messages(self, severity):
-        if severity not in self.messages: return []
-        return self.messages[severity]
-
-    def format_messages(self, severity, prefix = '', offset = 0, format = '{message}', line_width = None):
-        if severity not in self.messages: return ''
-        result = []
-        for timestamp, stack in self.messages[severity]:
-            output = []
-            for index in xrange(len(stack)):
-                if index:
-                    output.append('\n')
-                    output.append(' ' * (len(prefix) + index * offset))
-                    output.append(stack[index])
-                else:
-                    output.append(prefix)
-                    output.append(format.format(timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp)), message = stack[index]))
-            result.append(''.join(output))
-        return '\n'.join(result)
 
 
 class WreckStorageObject(object):
@@ -1139,8 +1128,6 @@ class WreckVariable(object):
                 if self.value is not None: return self.value
                 name = 'reference' if self.is_static else 'variable'
                 WRECK.issues.undefined_refs[self.formatted_name()] = self
-                #WRECK.log.error('undefined %s %r, referenced by: %s' % (name, self, self.list_references()))
-                #WRECK.undefined_variables.add(self)
                 self.is_forced = True
                 return 0
         except WreckException as e:
@@ -1804,7 +1791,9 @@ level = lambda value: WreckAggregateValue({'level':value})
 
 class WRECK(object):
 
-    version = '1.1.0'
+    version = '2.0 alpha 1'
+
+    log = logging.getLogger('WRECK').debug
 
     config = WreckStorageObject(
         show_help = False,        # Show command line syntax help instead of doing any processing.
@@ -1864,14 +1853,99 @@ class WRECK(object):
                                # list of plaintext error messages
     )
 
-    libraries = WreckStorageObject()
+    libraries = WreckStorageObject(
+        fac       = WreckLibrary('fac', WreckFactionReference, module = 'factions', data = 'factions', export = 'factions', prefix = 'fac_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_float, [(_parse_ref('fac'), _parse_float)], [_parse_str], _optional(_parse_int, 0xAAAAAA)),
+                                ),
+        itm       = WreckLibrary('itm', WreckItemReference, module = 'items', data = 'items', export = 'item_kinds1', prefix = 'itm_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(unparse_item_aggregate), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []), _optional([_parse_int], [])),
+                                ),
+        icon      = WreckLibrary('icon', module = 'map_icons', data = 'map_icons', export = 'map_icons', prefix = 'icon_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_int, _optional(_parse_float, 0), _optional(_parse_float, 0), _optional(_parse_float, 0), _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []) ),
+                                ),
+        mnu       = WreckLibrary('mnu', module = 'game_menus', data = 'game_menus', export = 'menus', prefix = 'mnu_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_str, _parse_expect('none'), _parse_script('{lib}.{uid}(#{0}).init'), [(_parse_id, _parse_script('{lib}.{uid}(#{0}).item(#{2}).conditions'), _parse_str, _parse_script('{lib}.{uid}(#{0}).item(#{2}).consequences'), _optional(_parse_str, ''))]),
+                                ),
+        mesh      = WreckLibrary('mesh', module = 'meshes', data = 'meshes', export = 'meshes', prefix = 'mesh_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float),
+                                ),
+        mt        = WreckLibrary('mt', module = 'mission_templates', data = 'mission_templates', export = 'mission_templates', prefix = 'mt_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, _parse_str, [(_parse_int, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_int])], [(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).conditions'), _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).consequences'))]),
+                                ),
+        track     = WreckLibrary('track', module = 'music', data = 'tracks', export = 'music', prefix = 'track_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_file('{export_path}/Music/{file}', '{warband_path}/music/{file}'), _parse_int, _parse_int),
+                                ),
+        psys      = WreckLibrary('psys', module = 'particle_systems', data = 'particle_systems', export = 'particle_systems', prefix = 'psys_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_int, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float, _parse_float), (_parse_float, _parse_float, _parse_float), _parse_float, _optional(_parse_float, 0), _optional(_parse_float, 0)),
+                                ),
+        p         = WreckLibrary('p', WreckPartyReference, module = 'parties', data = 'parties', export = 'parties', prefix = 'p_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, (_parse_float, _parse_float), [(_parse_int, _parse_int, _parse_int)], _optional(_parse_float, 0)),
+                                ),
+        pt        = WreckLibrary('pt', WreckPartyTemplateReference, module = 'party_templates', data = 'party_templates', export = 'party_templates', prefix = 'pt_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [(_parse_int, _parse_int, _parse_int, _optional(_parse_int, 0))]),
+                                ),
+        prsnt     = WreckLibrary('prsnt', module = 'presentations', data = 'presentations', export = 'presentations', prefix = 'prsnt_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
+                                ),
+        qst       = WreckLibrary('qst', module = 'quests', data = 'quests', export = 'quests', prefix = 'qst_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_str),
+                                ),
+        spr       = WreckLibrary('spr', module = 'scene_props', data = 'scene_props', export = 'scene_props', prefix = 'spr_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
+                                ),
+        scn       = WreckLibrary('scn', WreckSceneReference, module = 'scenes', data = 'scenes', export = 'scenes', prefix = 'scn_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_file('{export_path}/SceneObj/{file}.scn'), _parse_int, _parse_id, _parse_id, (_parse_float, _parse_float), (_parse_float, _parse_float), _parse_float, _parse_id, [_parse_ref('scn')], [_parse_ref('trp')], _optional(_parse_id, '0')),
+                                ),
+        script    = WreckLibrary('script', module = 'scripts', data = 'scripts', export = 'scripts', prefix = 'script_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_script('{lib}.{uid}(#{0})', check_canfail = True)),
+                                ),
+        skl       = WreckLibrary('skl', module = 'skills', data = 'skills', export = 'skills', prefix = 'skl_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_str),
+                                ),
+        snd       = WreckLibrary('snd', module = 'sounds', data = 'sounds', export = 'sounds', prefix = 'snd_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, [_parse_file('{export_path}/Sounds/{file}', '{warband_path}/Sounds/{file}')]),
+                                ),
+        s         = WreckLibrary('s', opmask = opmask_string, module = 'strings', data = 'strings', export = 'strings', prefix = 'str_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str),
+                                ),
+        tableau   = WreckLibrary('tableau', module = 'tableau_materials', data = 'tableaus', export = 'tableau_materials', prefix = 'tableau_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_script('{lib}.{uid}(#{0})')),
+                                ),
+        trp       = WreckLibrary('trp', WreckTroopReference, module = 'troops', data = 'troops', export = 'troops', prefix = 'trp_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_intpair], _parse_aggregate(unparse_attr_aggregate), _parse_aggregate(unparse_wp_aggregate), _parse_int, _parse_int, _optional(_parse_int, 0), _optional(_parse_str, '0'), _optional(_parse_int, 0), _optional(_parse_int, 0)),
+                                ),
+        anim      = WreckLibrary('anim', module = 'animations', data = 'animations', export = 'actions', prefix = 'anim_', uid_generator = _uid_std(0),
+                                ),
+        _dlg      = WreckLibrary('dialog', module = 'dialogs', data = 'dialogs', export = 'conversation', extendable = False, uid_generator = _uid_dialog,
+                                 parser = _parse_tuple(_parse_int, _parse_uid, _parse_script('{lib}.{uid}(#{0}).conditions'), _parse_str, _parse_uid, _parse_script('{lib}.{uid}(#{0}).consequences'), _optional(_parse_str, 'NO_VOICEOVER')),
+                                ),
+        _dlgst    = WreckLibrary('dialog_state', export = 'dialog_states', extendable = False), # Filled by dialog processor/aggregator
+        _skin     = WreckLibrary('skin', module = 'skins', data = 'skins', export = 'skins', extendable = False, uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, _parse_id, _parse_id, [(_parse_int, _parse_int, _parse_float, _parse_float, _parse_str)], [_parse_id], [_parse_id], [_parse_id], [_parse_id], [(_parse_id, _parse_int, [_parse_id], [_parse_int])], [(_parse_int, _parse_ref('snd'))], _parse_id, _parse_float, _parse_int, _parse_int, _optional([(_parse_float, _parse_int, _repeatable((_parse_float, _parse_int)))], []) ),
+                                ),
+        _trig     = WreckLibrary('trigger', module = 'triggers', data = 'triggers', export = 'triggers', extendable = False, uid_generator = _uid_trigger,
+                                 parser = _parse_tuple(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).conditions'), _parse_script('{lib}.{uid}(#{0}).consequences')),
+                                ),
+        _strig    = WreckLibrary('simple_trigger', module = 'simple_triggers', data = 'simple_triggers', export = 'simple_triggers', extendable = False, uid_generator = _uid_strigger,
+                                 parser = _parse_tuple(_parse_float, _parse_script('{lib}.{uid}(#{0})')),
+                                ),
+        imod      = WreckLibrary('imod', WreckItemModifierReference, prefix = 'imod_', uid_generator = _uid_std(0),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_float, _parse_float),
+                                ),
+        imodbit   = WreckLibrary('imodbit', prefix = 'imodbit_'),
+        l         = WreckLibrary('l', opmask = opmask_local_variable, defaults = { 'static': False }, prefix = ':'),
+        g         = WreckLibrary('g', opmask = opmask_variable, defaults = { 'static': False }, prefix = '$'),
+        _intreg   = WreckLibrary('reg', defaults = { 'static': False }),
+        _posreg   = WreckLibrary('pos'),
+        _strreg   = WreckLibrary('sreg'),
+        _qstr     = WreckLibrary('qstr', defaults = { 'static': False }, export = 'quick_strings'),
+        _opcode   = _opcode,
+    )
 
     reference_triggers = {} # Filled when importing header_triggers, used to convert trigger condition values back to human-readable strings
     reference_operations = {} # Filled when importing header_operations, used to convert operation codes back to human-readable strings
 
     num_weapon_proficiencies = 6 # Default value, will be overridden from header_troops
-
-    log = WreckLogger()
 
     # This dict contains pre-made namespace for imported modules.
     _module_namespace = {}
@@ -1889,13 +1963,17 @@ class WRECK(object):
     @classmethod
     def initialize_wreck(cls):
         global _python_import, _wreck_import_hook
+        cls.log('initialize_wreck() started')
         import __builtin__
         _python_import = __builtin__.__import__
         __builtin__.__import__ = _wreck_import_hook
+        cls.log('activated WRECK module import hook')
         sys.modules['compiler'] = imp.new_module('compiler')
+        cls.log('initialized fake `compiler` module for backwards compatibility')
 
     @classmethod
     def initialize_config(cls):
+        cls.log('initialize_config() started')
         for index in xrange(1, len(sys.argv)):
             option = sys.argv[index].split('=', 1)
             option[0] = option[0].lstrip('-/').lower()
@@ -1905,16 +1983,13 @@ class WRECK(object):
             elif option[0] == 'tag': cls.config.all_tags = True
             elif option[0] == 'wait': cls.config.wait_enter = True
             elif option[0] == 'nodupe': cls.config.report_duplicates = False
-            elif option[0] == 'silent': cls.config.reporting = float('inf')
-            elif option[0].startswith('critical'): cls.config.reporting = CRITICAL
-            elif option[0].startswith('failure'): cls.config.reporting = FAILURE
+            elif option[0] == 'verbose': cls.config.reporting = EVERYTHING
+            elif option[0] == 'silent': cls.config.reporting = NOTHING
             elif option[0].startswith('error'): cls.config.reporting = ERROR
             elif option[0].startswith('mistake'): cls.config.reporting = MISTAKE
             elif option[0].startswith('warning'): cls.config.reporting = WARNING
             elif option[0].startswith('advice'): cls.config.reporting = ADVICE
             elif option[0].startswith('notice'): cls.config.reporting = INFO
-            elif option[0].startswith('detail'): cls.config.reporting = DETAILS
-            elif option[0].startswith('debug'): cls.config.reporting = DEBUG
             elif option[0] == 'warband': cls.config.warband_module = True
             elif option[0] == 'mnb': cls.config.warband_module = False
             elif option[0] == 'auto': cls.config.warband_module = None
@@ -1945,147 +2020,69 @@ class WRECK(object):
         Will make sure that module and export paths actually exist, that module_info.py file exists in module folder,
         and will also auto-detect module version (Warband or Mount&Blade) if necessary.
         """
+        cls.log('validate_config() started')
         if cls.config.module_path is None:
             cls.config.module_path = os.getcwd().rstrip(r'\/').replace('\\', '/')
+            cls.log('module_path not defined, using current working directory as default')
         elif not os.path.exists(cls.config.module_path):
+            cls.log('module_path %r does not exist, using current working directory as default', cls.config.module_path)
             cls.config.module_path = os.getcwd().rstrip(r'\/').replace('\\', '/')
             cls.issues.errors.append('module path "{0}" does not exist'.format(cls.config.module_path))
         if not os.path.exists('/'.join([cls.config.module_path, 'module_info.py'])):
-            cls.issues.errors.append('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
+            cls.issues.mistakes.append('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
             cls.config.parse_module_info = False
+            cls.log('file module_info.py not found at %r, ignoring', cls.config.module_path)
         if cls.config.warband_module is None:
             cls.config.warband_module = cls.module_files_exist('module_info_pages.py', 'module_postfx.py')
+            cls.log('auto-detected config.warband_module = %r', cls.config.warband_module)
         if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules:
             cls.config.use_color = False
             cls.issues.notifications.append('colorama library is missing, disabling colored output')
+            cls.log('configured to use colored output but colorama library is missing on Windows')
         sys.path.insert(0, cls.config.module_path)
+        cls.log('module_path %r initialized as primary import source', cls.config.module_path)
 
     @classmethod
     def initialize_libraries(cls):
 
         # Core libraries (exportable)
-        cls.libraries.fac       = WreckLibrary('fac', WreckFactionReference, module = 'factions', data = 'factions', export = 'factions', prefix = 'fac_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_float, [(_parse_ref('fac'), _parse_float)], [_parse_str], _optional(_parse_int, 0xAAAAAA)),
-                                              )
-        cls.libraries.itm       = WreckLibrary('itm', WreckItemReference, module = 'items', data = 'items', export = 'item_kinds1', prefix = 'itm_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(unparse_item_aggregate), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []), _optional([_parse_int], [])),
-                                              )
-        cls.libraries.icon      = WreckLibrary('icon', module = 'map_icons', data = 'map_icons', export = 'map_icons', prefix = 'icon_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_int, _optional(_parse_float, 0), _optional(_parse_float, 0), _optional(_parse_float, 0), _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []) ),
-                                              )
-        cls.libraries.mnu       = WreckLibrary('mnu', module = 'game_menus', data = 'game_menus', export = 'menus', prefix = 'mnu_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_str, _parse_expect('none'), _parse_script('{lib}.{uid}(#{0}).init'), [(_parse_id, _parse_script('{lib}.{uid}(#{0}).item(#{2}).conditions'), _parse_str, _parse_script('{lib}.{uid}(#{0}).item(#{2}).consequences'), _optional(_parse_str, ''))]),
-                                              )
-        cls.libraries.mesh      = WreckLibrary('mesh', module = 'meshes', data = 'meshes', export = 'meshes', prefix = 'mesh_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float),
-                                              )
-        cls.libraries.mt        = WreckLibrary('mt', module = 'mission_templates', data = 'mission_templates', export = 'mission_templates', prefix = 'mt_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, _parse_str, [(_parse_int, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_int])], [(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).conditions'), _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).consequences'))]),
-                                              )
-        cls.libraries.track     = WreckLibrary('track', module = 'music', data = 'tracks', export = 'music', prefix = 'track_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_file('{export_path}/Music/{file}', '{warband_path}/music/{file}'), _parse_int, _parse_int),
-                                              )
-        cls.libraries.psys      = WreckLibrary('psys', module = 'particle_systems', data = 'particle_systems', export = 'particle_systems', prefix = 'psys_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_int, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float), (_parse_float, _parse_float, _parse_float), (_parse_float, _parse_float, _parse_float), _parse_float, _optional(_parse_float, 0), _optional(_parse_float, 0)),
-                                              )
-        cls.libraries.p         = WreckLibrary('p', WreckPartyReference, module = 'parties', data = 'parties', export = 'parties', prefix = 'p_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, (_parse_float, _parse_float), [(_parse_int, _parse_int, _parse_int)], _optional(_parse_float, 0)),
-                                              )
-        cls.libraries.pt        = WreckLibrary('pt', WreckPartyTemplateReference, module = 'party_templates', data = 'party_templates', export = 'party_templates', prefix = 'pt_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [(_parse_int, _parse_int, _parse_int, _optional(_parse_int, 0))]),
-                                              )
-        cls.libraries.prsnt     = WreckLibrary('prsnt', module = 'presentations', data = 'presentations', export = 'presentations', prefix = 'prsnt_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
-                                              )
-        cls.libraries.qst       = WreckLibrary('qst', module = 'quests', data = 'quests', export = 'quests', prefix = 'qst_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_str),
-                                              )
-        cls.libraries.spr       = WreckLibrary('spr', module = 'scene_props', data = 'scene_props', export = 'scene_props', prefix = 'spr_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
-                                              )
-        cls.libraries.scn       = WreckLibrary('scn', WreckSceneReference, module = 'scenes', data = 'scenes', export = 'scenes', prefix = 'scn_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_file('{export_path}/SceneObj/{file}.scn'), _parse_int, _parse_id, _parse_id, (_parse_float, _parse_float), (_parse_float, _parse_float), _parse_float, _parse_id, [_parse_ref('scn')], [_parse_ref('trp')], _optional(_parse_id, '0')),
-                                              )
-        cls.libraries.script    = WreckLibrary('script', module = 'scripts', data = 'scripts', export = 'scripts', prefix = 'script_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_script('{lib}.{uid}(#{0})', check_canfail = True)),
-                                              )
-        cls.libraries.skl       = WreckLibrary('skl', module = 'skills', data = 'skills', export = 'skills', prefix = 'skl_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_str),
-                                              )
-        cls.libraries.snd       = WreckLibrary('snd', module = 'sounds', data = 'sounds', export = 'sounds', prefix = 'snd_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, [_parse_file('{export_path}/Sounds/{file}', '{warband_path}/Sounds/{file}')]),
-                                              )
-        cls.libraries.s         = WreckLibrary('s', opmask = opmask_string, module = 'strings', data = 'strings', export = 'strings', prefix = 'str_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str),
-                                              )
-        cls.libraries.tableau   = WreckLibrary('tableau', module = 'tableau_materials', data = 'tableaus', export = 'tableau_materials', prefix = 'tableau_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_script('{lib}.{uid}(#{0})')),
-                                              )
-        cls.libraries.trp       = WreckLibrary('trp', WreckTroopReference, module = 'troops', data = 'troops', export = 'troops', prefix = 'trp_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_intpair], _parse_aggregate(unparse_attr_aggregate), _parse_aggregate(unparse_wp_aggregate), _parse_int, _parse_int, _optional(_parse_int, 0), _optional(_parse_str, '0'), _optional(_parse_int, 0), _optional(_parse_int, 0)),
-                                              )
         if cls.config.warband_module:
+            cls.log('module identified as Warband-type, initializing libraries for info_pages and postfx_params')
             cls.libraries.ip    = WreckLibrary('ip', module = 'info_pages', data = 'info_pages', export = 'info_pages', prefix = 'ip_', uid_generator = _uid_std(0),
                                                parser = _parse_tuple(_parse_uid, _parse_str, _parse_str),
                                               )
             cls.libraries.pfx   = WreckLibrary('pfx', module = 'postfx', data = 'postfx_params', export = 'postfx', prefix = 'pfx_', uid_generator = _uid_std(0),
                                                parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, (_parse_float, _parse_float, _parse_float, _parse_float), (_parse_float, _parse_float, _parse_float, _parse_float), (_parse_float, _parse_float, _parse_float, _parse_float)),
                                               )
-            cls.libraries.anim  = WreckLibrary('anim', module = 'animations', data = 'animations', export = 'actions', prefix = 'anim_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, _repeatable((_parse_float, _parse_id, _parse_int, _parse_int, _parse_int, _optional(_parse_int, 0), _optional((_parse_float, _parse_float, _parse_float), (0, 0, 0)), _optional(_parse_float, 0)))),
-                                              )
+            cls.log('module identified as Warband-type, setting appropriate parser and processor for animations module')
+            cls.libraries.anim['parser'] = _parse_tuple(_parse_uid, _parse_int, _parse_int, _repeatable((_parse_float, _parse_id, _parse_int, _parse_int, _parse_int, _optional(_parse_int, 0), _optional((_parse_float, _parse_float, _parse_float), (0, 0, 0)), _optional(_parse_float, 0))))
         else:
-            cls.libraries.anim  = WreckLibrary('anim', module = 'animations', data = 'animations', export = 'actions', prefix = 'anim_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _repeatable((_parse_float, _parse_id, _parse_int, _parse_int, _parse_int, _optional(_parse_int, 0), _optional((_parse_float, _parse_float, _parse_float), (0, 0, 0)), _optional(_parse_float, 0)))),
-                                              )
-
-        # Core libraries that don't need reference handling (exportable)
-        cls.libraries._dlg      = WreckLibrary('dialog', module = 'dialogs', data = 'dialogs', export = 'conversation', extendable = False, uid_generator = _uid_dialog,
-                                               parser = _parse_tuple(_parse_int, _parse_uid, _parse_script('{lib}.{uid}(#{0}).conditions'), _parse_str, _parse_uid, _parse_script('{lib}.{uid}(#{0}).consequences'), _optional(_parse_str, 'NO_VOICEOVER')),
-                                              )
-        cls.libraries._dlgst    = WreckLibrary('dialog_state', export = 'dialog_states', extendable = False) # Filled by dialog processor/aggregator
-        cls.libraries._skin     = WreckLibrary('skin', module = 'skins', data = 'skins', export = 'skins', extendable = False, uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, _parse_id, _parse_id, [(_parse_int, _parse_int, _parse_float, _parse_float, _parse_str)], [_parse_id], [_parse_id], [_parse_id], [_parse_id], [(_parse_id, _parse_int, [_parse_id], [_parse_int])], [(_parse_int, _parse_ref('snd'))], _parse_id, _parse_float, _parse_int, _parse_int, _optional([(_parse_float, _parse_int, _repeatable((_parse_float, _parse_int)))], []) ),
-                                              )
-        cls.libraries._trig     = WreckLibrary('trigger', module = 'triggers', data = 'triggers', export = 'triggers', extendable = False, uid_generator = _uid_trigger,
-                                               parser = _parse_tuple(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).conditions'), _parse_script('{lib}.{uid}(#{0}).consequences')),
-                                              )
-        cls.libraries._strig    = WreckLibrary('simple_trigger', module = 'simple_triggers', data = 'simple_triggers', export = 'simple_triggers', extendable = False, uid_generator = _uid_strigger,
-                                               parser = _parse_tuple(_parse_float, _parse_script('{lib}.{uid}(#{0})')),
-                                              )
+            cls.log('module identified as Mount&Blade-type, setting appropriate parser and processor for animations module')
+            cls.libraries.anim['parser'] = _parse_tuple(_parse_uid, _parse_int, _repeatable((_parse_float, _parse_id, _parse_int, _parse_int, _parse_int, _optional(_parse_int, 0), _optional((_parse_float, _parse_float, _parse_float), (0, 0, 0)), _optional(_parse_float, 0))))
 
         # Optional WRECK libraries (exportable to special locations)
         if cls.module_files_exist('module_ui_strings.py'):
+            cls.log('module_ui_strings found in working directory, adding to libraries')
             cls.libraries.uistr = WreckLibrary('uistr', module = 'ui_strings', data = 'ui_strings', export = 'Languages/en/ui', export_ext = 'csv', uid_generator = _uid_std(0),
                                                parser = _parse_tuple(_parse_uid, _parse_str),
                                               )
         if cls.module_files_exist('module_user_hints.py'):
+            cls.log('module_user_hints found in working directory, adding to libraries')
             cls.libraries.hint  = WreckLibrary('hint', module = 'user_hints', data = 'user_hints', export = 'Languages/en/hints', export_ext = 'csv', extendable = False, uid_generator = _uid_index,
                                                parser = _parse_tuple(_parse_str),
                                               )
+
         if cls.module_files_exist('module_item_modifiers.py'):
-            cls.libraries.imod  = WreckLibrary('imod', WreckItemModifierReference, module = 'item_modifiers', data = 'item_modifiers', export = 'Data/item_modifiers', prefix = 'imod_', uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_float, _parse_float),
-                                              )
+            cls.log('module_item_modifiers found in working directory, defining \'imod\' as exportable library')
+            cls.libraries.imod['module'] = 'item_modifiers'
+            cls.libraries.imod['data'] = 'item_modifiers'
+            cls.libraries.imod['export'] = 'Data/item_modifiers'
         else:
-            cls.libraries.imod  = WreckLibrary('imod', WreckItemModifierReference, prefix = 'imod_', source = DEFAULT_ITEM_MODIFIERS, uid_generator = _uid_std(0),
-                                               parser = _parse_tuple(_parse_uid, _parse_str, _parse_float, _parse_float),
-                                              )
-        cls.libraries.imodbit   = WreckLibrary('imodbit', prefix = 'imodbit_')
-
-        # Libraries for variable/string support (quick_strings is exportable, globals need special handling which cannot be provided by standard pipeline)
-        cls.libraries.l         = WreckLibrary('l', opmask = opmask_local_variable, defaults = { 'static': False }, prefix = ':')
-        cls.libraries.g         = WreckLibrary('g', opmask = opmask_variable, defaults = { 'static': False }, prefix = '$')
-        #cls.libraries.registers = WreckLibrary('reg', defaults = { 'static': False })
-        #cls.libraries.qstr      = WreckLibrary('qstr', defaults = { 'static': False }, export = 'quick_strings')
-
-        cls.libraries._intreg   = WreckLibrary('reg', defaults = { 'static': False })
-        cls.libraries._posreg   = WreckLibrary('pos')
-        cls.libraries._strreg   = WreckLibrary('sreg')
-        cls.libraries._qstr     = WreckLibrary('qstr', defaults = { 'static': False }, export = 'quick_strings')
-        cls.libraries._opcode   = _opcode
+            cls.log('module_item_modifiers not found in working directory, defining \'imod\' as non-exportable library with pre-initialized source')
+            cls.libraries.imod['source'] = DEFAULT_ITEM_MODIFIERS
 
         if cls.config.all_tags:
+            cls.log('config.all_tags setting is active, applying M&B tags on all libraries')
             cls.libraries.fac['opmask'] = tag_faction << op_num_value_bits
             cls.libraries.itm['opmask'] = tag_item << op_num_value_bits
             cls.libraries.icon['opmask'] = tag_map_icon << op_num_value_bits
@@ -2106,8 +2103,10 @@ class WRECK(object):
             cls.libraries.tableau['opmask'] = tag_tableau << op_num_value_bits
             cls.libraries.trp['opmask'] = tag_troop << op_num_value_bits
 
+        cls.log('updating module namespace with library shortcuts')
         cls._module_namespace.update((name, lib) for (name, lib) in cls.libraries.__dict__.iteritems() if not name.startswith('_'))
 
+        cls.log('updating module namespace with WRECK convenience functions')
         cls._module_namespace.update({
             'ATTR': ATTR,
             'SKILLS': SKILLS,
@@ -2116,6 +2115,7 @@ class WRECK(object):
             'num_weapon_proficiencies': cls.num_weapon_proficiencies,
         })
 
+        cls.log('updating module overrides with WRECK replacements for some header-defined objects')
         cls._module_overrides.update({
             'weight': weight,
             'head_armor': head_armor,
@@ -2158,6 +2158,7 @@ class WRECK(object):
         })
 
         # Initialize register modules
+        cls.log('initializing register references')
         for index in xrange(128):
             setattr(cls.libraries._intreg, 'reg%d' % index, opmask_register | index)
             cls._module_overrides['reg%d' % index] = cls.libraries._intreg('reg%d' % index)
@@ -2165,10 +2166,13 @@ class WRECK(object):
             cls._module_overrides['pos%d' % index] = cls.libraries._posreg('pos%d' % index)
             setattr(cls.libraries._strreg, 's%d' % index, index)
             cls._module_overrides['s%d' % index]   = cls.libraries._strreg('s%d' % index)
+
         cls.libraries._intreg['extendable'] = False # Do not allow any register declarations after this point
         cls.libraries._posreg['extendable'] = False # Do not allow any position declarations after this point
         cls.libraries._strreg['extendable'] = False # Do not allow any string register declarations after this point
+        cls.log('register libraries are frozen, all attempts to define new registers will generate error messages')
 
+        cls.log('creating module overrides for attribute-defining constants')
         for index in xrange(3, 32):
             for attr in ('str', 'agi', 'int', 'cha'):
                 cls._module_overrides['%s_%d' % (attr, index)] = WreckAggregateValue({attr: index})
@@ -2176,26 +2180,37 @@ class WRECK(object):
         cls._module_namespace['WRECK'] = cls
         cls._module_namespace.update(cls._module_overrides)
 
+        cls.log('shared module namespace initialization complete')
+
         sys.modules['compiler'].__dict__.update(cls._module_namespace)
+
+        cls.log('fake compiler module updated with contents of shared module namespace')
+
 
     @classmethod
     def preload_headers(cls):
+        cls.log('preload_headers() started')
         for module in ('common', 'operations', 'animations', 'dialogs', 'factions', 'game_menus', 'ground_types',
                        'item_modifiers', 'items', 'map_icons', 'meshes', 'mission_templates', 'mission_types', 'music',
                        'particle_systems', 'parties', 'postfx', 'presentations', 'quests', 'scene_props', 'scenes',
                        'skills', 'skins', 'sounds', 'strings', 'tableau_materials', 'terrain_types', 'triggers', 'troops'):
             header_file = '/'.join([cls.config.module_path, cls.config.import_header_files.format(module_name = module)])
             if not os.path.exists(header_file):
-                cls.log.debug('Failed to preload header file {0}'.format(header_file))
+                cls.log('cannot preload header file %r: does not exist', header_file)
                 continue
             try:
                 _wreck_import_hook('header_{0}'.format(module))
-                cls.log.details('Successfully preloaded header file {0}'.format(header_file))
+                cls.log('successfully preloaded header file %r', header_file)
             except Exception:
-                pass
+                cls.log('failed to preload header file %r', header_file)
 
     @classmethod
     def initialize_module(cls):
+        cls.log('initialize_module() started')
+        if not cls.config.parse_module_info:
+            cls.log('skipping import of module_info as it was not found at import_path')
+            return
+        cls.log('loading module_info file from module_path')
         import module_info
         data = module_info.__dict__
         if WRECK.config.export_path is None:
@@ -2203,50 +2218,67 @@ class WRECK(object):
             os.chdir(cls.config.module_path)
             cls.config.export_path = os.path.abspath(data['export_dir'].rstrip(r'\/')).replace('\\', '/')
             os.chdir(current_dir)
+            cls.log('applied `export_dir` setting from module_info file')
         if 'write_id_files' in data:
             value = data['write_id_files']
             if isinstance(value, str) and ('%s' in value):
                 value = value.replace('%s', '{module_name}')
+                cls.log('converted and applied old-style `write_id_files` setting from module_info file')
+            else:
+                cls.log('applied `write_id_files` setting from module_info file')
             cls.config.export_id_files = value
         if ('show_performance_data' in data) and (cls.config.performance is None):
             cls.config.performance = data['show_performance_data']
+            cls.log('applied `show_performance_data` setting from module_info file')
         if 'export_filename' in data:
             value = data['export_filename']
             if isinstance(value, str) and ('%s' in value):
                 if value.endswith('.txt'): value = value[:-4] + '.{export_ext}'
                 value = value.replace('%s', '{export_name}')
+                cls.log('converted and applied old-style `export_filename` setting from module_info file')
+            else:
+                cls.log('applied `export_filename` setting from module_info file')
             cls.config.export_module_files = value
 
     @classmethod
     def validate_module(cls):
+        cls.log('validate_module() started')
         if cls.config.export_path is None:
             cls.issues.errors.append('export path not defined by module_info.py or command line options')
+            cls.log('config.export_path not defined, disabling export')
         if not os.path.exists(cls.config.export_path):
+            cls.log('config.export_path (%r) does not exist, disabling export', cls.config.export_path)
             cls.issues.errors.append('export path "{0}" does not exist'.format(cls.config.export_path))
             cls.config.export_path = None
         if cls.config.export_path is not None:
             module_ini = '/'.join([cls.config.export_path, 'module.ini'])
             if not os.path.exists(module_ini):
                 cls.issues.warnings.append('could not find module.ini file at export destination'.format(module_ini))
+                cls.log('module.ini file not found at %r', cls.config.export_path)
             if not cls.config.test_run:
+                cls.log('checking export_path for write permissions')
                 tmp_path = '/'.join([cls.config.export_path, '.tmpwreck'])
                 try:
                     with open(tmp_path, 'w') as f:
                         f.write('test')
                     with open(tmp_path, 'r') as f:
                         if f.read() != 'test':
+                            cls.log('export_path %r failed read/write integrity check, disabling export', cls.config.export_path)
                             cls.issues.errors.append('export path "{0}" failed read/write integrity check, export disabled'.format(cls.config.export_path))
                 except IOError as e:
+                    cls.log('I/O error during read/write check:\n%s', formatted_exception())
                     cls.issues.errors.append('cannot write to export path "{0}": {1}'.format(cls.config.export_path, e.message))
                 finally:
                     if os.path.exists(tmp_path):
                         os.remove(tmp_path)
         try:
+            cls.log('trying to load variables.txt file')
             format_vars = { 'module_path': cls.config.module_path }
             if cls.config.export_path is not None:
                 format_vars['export_path'] = cls.config.export_path
             variables_txt = cls.config.variables_file.format(**format_vars)
         except KeyError:
+            cls.log('failed to parse %r as proper path to variables.txt file:\n%s', cls.config.variables_file, formatted_exception())
             cls.issues.warnings.append('failed to load variables.txt file due to illegal or missing export_path')
         else:
             if os.path.exists(variables_txt):
@@ -2256,26 +2288,33 @@ class WRECK(object):
                         #variables = filter(lambda st: st, map(lambda st: st.strip(), f.readlines()))
                         # FIXME: use this data
                 except IOError as e:
+                    cls.log('failed to load variables.txt file:\n%s', formatted_exception())
                     cls.issues.errors.append('I/O error trying to read "{0}": {1}'.format(variables_txt, e.message))
             else:
                 cls.issues.mistakes.append('variables.txt file not found at "{0}"'.format(variables_txt))
 
     @classmethod
     def load_module_data(cls):
+        cls.log('load_module_data() started')
         for library in cls.libraries:
             if not library['module']: continue
+            cls.log('importing module_%s.py...', library['module'])
             module = _wreck_import_hook('module_{0}'.format(library['module']))
             library['source'] = module.__dict__[library['data']]
+            cls.log('successfully imported module_%s.py, library sources updated', library['module'])
 
     @classmethod
     def apply_plugins(cls):
+        cls.log('apply_plugins() started')
         pass # TODO: implement
 
     @classmethod
     def validate_module_data(cls):
+        cls.log('validate_module_data() started')
         for library in cls.libraries:
             with library as lib_data:
                 if lib_data.source and lib_data.parser:
+                    cls.log('library %r has source data and a defined parser, processing', lib_data.basename)
                     sanitized = []
                     index = 0
                     norm_index = 0
@@ -2288,35 +2327,42 @@ class WRECK(object):
                         try:
                             uid = lib_data.uid_generator(entry, norm_index)
                         except Exception:
+                            cls.log('failed to evaluate uid for entry #%d:\n%s\n%s', norm_index, entry, formatted_exception())
                             raise WreckException('cannot parse entry #{0} in {1}\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception()))
                         try:
                             parsed = lib_data.parser(lib_data.source, index, library = library, entry = entry, uid = uid)
                             sanitized.append(parsed[0])
+                            cls.log('entry #%d %s.%s processed', norm_index, lib_data.basename, uid)
                         except WreckException as e:
-                            raise WreckException('cannot parse entry {1}.{4} (#{0})\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception(), uid), *e.args)
+                            cls.log('entry #%d %s.%s failed to parse with exception:\n%s', norm_index, lib_data.basename, uid, e.formatted())
+                            raise WreckException('cannot parse entry {1}.{4} (#{0})\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception(), uid), e.formatted())
                         except Exception:
+                            cls.log('entry #%d %s.%s failed to parse with exception:\n%s', norm_index, lib_data.basename, uid, formatted_exception())
                             raise WreckException('cannot parse entry {1}.{4} (#{0})\nentry source: {2!r}\n{3}'.format(norm_index, lib_data.basename, entry, formatted_exception(), uid), formatted_exception())
                         index += 1
                         norm_index += 1
                     lib_data.sanitized = sanitized
-                    WRECK.log.details('library {0!r} parsed.'.format(library))
+                    cls.log('library %r fully processed', lib_data.basename)
 
     @classmethod
     def resolve_references(cls):
+        cls.log('resolve_references() started')
         for library in cls.libraries:
             with library as lib_data:
                 if lib_data.extendable and lib_data.sanitized:
+                    cls.log('calculating references for library %r', lib_data.basename)
                     for index in xrange(len(lib_data.sanitized)):
                         entry = lib_data.sanitized[index]
                         try:
                             setattr(library, internal_identifier(lib_data.uid_generator(entry, index)), index)
                         except Exception:
                             raise WreckException('failed to assign reference %r' % lib_data.uid_generator(entry, index), formatted_exception())
-                    #lib_data.extendable = False
-        WreckVariable.force_resolution = True
+                    lib_data.extendable = False
+                    cls.log('all valid references for library %r have been defined', lib_data.basename)
 
     @classmethod
     def apply_troop_upgrades(cls):
+        cls.log('apply_troop_ugprades() started')
         for module, base, upg1, upg2, ref in cls.troop_upgrades:
             if module is None: module = '<wreck>'
             with current_module(module):
@@ -2329,9 +2375,11 @@ class WRECK(object):
                     troop_tuple = trp_data.sanitized[trp_index]
                     troop_tuple[14] = upg1
                     troop_tuple[15] = upg2
+                    cls.log('applied troop upgrade path: %r upgrades to (%r, %r)', base, upg1, upg2)
 
     @classmethod
     def compile_scripts(cls):
+        cls.log('compile_scripts() started')
         for script in cls.scripting_blocks:
             script.compile()
 

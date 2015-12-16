@@ -12,11 +12,15 @@ __version__ = "$Revision$"
 
 import sys
 sys.dont_write_bytecode = True
-from wreck import *
-
-compiler_exit_code = 0
 
 if __name__ == '__main__':
+
+    import logging
+    logging.basicConfig(filename = 'compile.log', filemode = 'w+', format = '%(name)s: %(message)s', level = logging.DEBUG)
+    from wreck import *
+
+    compiler_exit_code = 0
+
     WRECK.config.module_path = 'wb_1166'
     WRECK.config.export_path = 'compiled'
     WRECK.config.wait_enter = True
@@ -52,9 +56,3 @@ if __name__ == '__main__':
 
     from pprint import pprint
     pprint(WRECK.issues.__dict__)
-    with open('compiler.log', 'w+') as f:
-        for severity in range(EVERYTHING):
-            f.write('SEVERITY {0}:'.format(severity))
-            f.write('\n')
-            f.write(WRECK.log.format_messages(severity))
-            f.write('\n')
