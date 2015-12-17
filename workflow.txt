@@ -20,14 +20,13 @@ WRECK WORKFLOW
     + initialize shared module namespace
     + initialize all register references (regN, sN, posN)
     + register all 'protected' objects that WRECK will not allow module to change (registers, some functions etc)
-    - link fake `compiler` module to shared namespace (so `from compiler import *` will actually work properly)
 * Preload header files:
     + attempt to preload all header files from module_path to fill shared namespace with data
 - Initialize module settings:
     + load module_info.py file
     + if export_dir is defined in module_info.py and export_path hasn't been set from command line, use export_dir value
     + apply `write_id_files`, `show_performance_data` and `export_filename` config options from module_info.py
-    - disallow plugins from executing properly, store them for later processing
+    + disallow plugins from executing properly, store them for later processing
     - allow override of most configuration settings from module_info.py file
         ? maybe only do command line parsing AFTER module_info.py to ensure proper overrides
         ? we will still need to check for `module_path` and `help` in command line before doing anything else

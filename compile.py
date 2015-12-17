@@ -32,9 +32,9 @@ if __name__ == '__main__':
             sys.exit(0)
         WRECK.validate_config()
         WRECK.initialize_libraries()
-        WRECK.preload_headers()
         WRECK.initialize_module()
         WRECK.validate_module()
+        WRECK.preload_headers()
 
         WRECK.load_module_data()      # load module files and process them
         #WRECK.apply_plugins()         # apply plugin effects (extend module data, prepare injections)

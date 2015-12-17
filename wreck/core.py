@@ -84,21 +84,6 @@ opmask_local_variable = tag_local_variable << op_num_value_bits
 opmask_quick_string   = tag_quick_string   << op_num_value_bits
 opmask_string         = tag_string         << op_num_value_bits
 
-# assign     = 2133
-# store_add  = 2120
-# store_sub  = 2121
-# store_mul  = 2122
-# store_div  = 2123
-# store_mod  = 2119
-# store_pow  = 2126
-# store_and  = 2117
-# store_or   = 2116
-# val_abs    = 2113
-# val_lshift = 2100
-# val_rshift = 2101
-# val_add    = 2105 # Used in binary xor
-# val_mul    = 2107 # Used in binary xor
-
 DEFAULT_ITEM_MODIFIERS = [
     ("plain",       "Plain %s",         1.000000, 1.000000), # Default. No effects. Item name is not modified.
     ("cracked",     "Cracked %s",       0.500000, 1.000000), # -5 damage, -4 armor, -46 hp
@@ -199,6 +184,7 @@ def _get_current_stack():
     return map(lambda i: (i[1], i[2], i[3], i[4][0]), inspect.stack())[1:]
 
 
+# TODO: need to expand this to multiple subclasses, conceal them as int values from module code
 class WreckAggregateValue(dict):
     """
     A wrapper class for some combined values in Warband modules.
@@ -484,6 +470,7 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                     _import_sanitize_header_skills(module.__dict__)
                 elif bottom_name == 'header_item_modifiers':
                     WRECK.log('processing as header_item_modifiers file')
+                    # TODO: safely deal with situation when module has different imod constants defined!
                     _import_sanitize_references(module.__dict__, WRECK.libraries.imod, WRECK.libraries.imodbit)
                 elif bottom_name == 'header_triggers':
                     WRECK.log('processing as header_triggers file')
@@ -545,6 +532,7 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
     return module
 
 
+# TODO: implement plugins functionality
 def _import_sanitize_plugin(data):
     # FIXME: load `injection` dict
     # FIXME: load data entries for all libraries
@@ -595,6 +583,21 @@ def _collect_injections(point, source = None):
 
 def inject(name, prefix = None, separator = None, suffix = None, empty = None):
     return WreckInjectionPoint(name, prefix, separator, suffix, empty)
+
+
+# |                                                                            |
+# |    COMPILER HELPER FUNCTIONS END                                           |
+# +                                                                            +
+#  \                                                                          /
+#   +------------------------------------------------------------------------+
+# endregion
+
+# region Compiler Parser Functions
+#   +------------------------------------------------------------------------+
+#  /                                                                          \
+# +                                                                            +
+# |    COMPILER PARSER FUNCTIONS START                                         |
+# |                                                                            |
 
 
 def _uid_std(offset):
@@ -724,6 +727,7 @@ def _parse_ref(lib_name):
         return 0, 1
     return _ref_parser
 
+# TODO: need to expand _parse_script() greatly, possibly introduce additional parser for operations
 def _parse_script(name_template, conversions = None, check_canfail = False):
     def _script_parser(rec, ofs, path = [], **argd):
         #print '_parse_script for %r in %r' % (path + [ofs], argd.get('uid'))
@@ -851,7 +855,7 @@ def _parse_intpair(rec, ofs, path = [], **argd):
 
 
 # |                                                                            |
-# |    COMPILER HELPER FUNCTIONS END                                           |
+# |    COMPILER PARSER FUNCTIONS END                                           |
 # +                                                                            +
 #  \                                                                          /
 #   +------------------------------------------------------------------------+
@@ -887,15 +891,6 @@ class WreckException(Exception):
     __str__ = formatted
 
     __repr__ = lambda self: 'WreckException(%r)' % self.args
-
-
-class WreckParserException(WreckException):
-
-    error_path = None
-
-    def __init__(self, path, *args):
-        self.error_path = path
-        super(WreckParserException, self).__init__(*args)
 
 
 class WreckInterruptPlugin(Exception):
@@ -955,6 +950,110 @@ class WreckStorageObject(object):
 
     def __iter__(self):
         return self.__dict__.itervalues()
+
+
+class WreckConfig(object):
+    __options = None
+    __arguments = None
+    __extras = None
+    __initialized = False
+
+    class WreckCmdlineOption(object):
+        __slots__ = ('name', 'args', 'value', 'help', 'parsed')
+
+        def __init__(self, _name, _help, _default = None, **args):
+            self.name = _name
+            self.value = _default
+            self.help = _help
+            self.args = args
+            self.parsed = False
+
+    class WreckCmdlineArgument(object):
+        __slots__ = ('name', 'argname', 'value', 'validator', 'help', 'parsed')
+
+        def __init__(self, name, help, default = None, validator = None, argname = None):
+            self.name = name
+            self.help = help
+            self.argname = name if argname is None else argname
+            self.value = default
+            self.validator = validator
+            self.parsed = False
+
+    def __init__(self):
+        self.__options = {}
+        self.__arguments = {}
+        self.__extras = {}
+        self.__initialized = True
+        self.add_option('help', 'show this help message', False, help = True)
+
+    def add_option(self, _name, _help, default = None, **args):
+        self.__options[_name] = self.WreckCmdlineOption(_name, _help, default, **args)
+
+    def add_argument(self, name, help, default = None, validator = None, argname = None):
+        self.__arguments[name] = self.WreckCmdlineArgument(name, help, default, validator, argname)
+
+    def parse(self, args = None):
+        if args is None: args = sys.argv[1:]
+        for argument in args:
+            argument = argument.lstrip('-/')
+            duplicate = False
+            try:
+                argname, value = argument.split('=', 1)
+                found = None
+                for arg in self.__arguments.itervalues():
+                    if arg.argname.startswith(argname):
+                        if found:
+                            duplicate = True
+                        found = arg
+                if found and not duplicate:
+                    if not found.validator or found.validator(value):
+                        found.value = value
+                        found.parsed = True
+                    else:
+                        print 'illegal argument value'
+                else:
+                    self.__extras[argname] = value
+            except ValueError:
+                found = value = None
+                for opt in self.__options.itervalues():
+                    for arg, argval in opt.args.iteritems():
+                        if arg.startswith(argument):
+                            if found and ((found != opt) or (value != argval)):
+                                duplicate = True
+                            found, value = opt, argval
+                if found and not duplicate:
+                    found.value = value
+                    found.parsed = True
+                else:
+                    self.__extras[argument] = True
+
+    def __getattr__(self, item):
+        if item in self.__arguments:
+            return self.__arguments[item].value
+        if item in self.__options:
+            return self.__options[item].value
+        if item in self.__extras:
+            return self.__extras[item]
+        return None
+
+    def __setattr__(self, item, value):
+        if not self.__initialized:
+            object.__setattr__(self, item, value)
+        elif item in self.__arguments:
+            self.__arguments[item].value = value
+        elif item in self.__options:
+            self.__options[item].value = value
+        else:
+            self.__extras[item] = value
+
+    def __contains__(self, item):
+        if not self.__initialized:
+            return object.__contains__(self, item)
+        if item in self.__arguments:
+            return self.__arguments[item].parsed
+        if item in self.__options:
+            return self.__options[item].parsed
+        return item in self.__extras
 
 
 class WreckInjection(object):
@@ -1700,46 +1799,6 @@ _abs = WreckOperation('abs', abs, 'abs(%r)', [_opcode.assign, 2, '{dest}', '{0}'
 #   +------------------------------------------------------------------------+
 # endregion
 
-# region WRECK Convenience Functions
-#   +------------------------------------------------------------------------+
-#  /                                                                          \
-# +                                                                            +
-# |    WRECK CONVENIENCE FUNCTIONS                                             |
-# |                                                                            |
-
-
-def SKILLS(**argd):
-    result = 0x000000000000000000000000000000000000000000
-    for skill_name, value in argd.iteritems():
-        result |= (value & 0xF) << (getattr(WRECK.skl, skill_name) << 2)
-    return result
-
-def ATTR(_str, _agi, _int, _cha, _lvl = 0):
-    return WreckAggregateValue([('str', _str), ('agi', _agi), ('int', _int), ('cha', _cha), ('level', _lvl)])
-
-def define_troop_upgrade(*argl):
-    stack = _get_current_stack() # stack[0] points to this line, stack[1] to whatever called this function
-    args = list(argl)
-    try:
-        if isinstance(args[0], (list, tuple)):
-            args.pop(0) # Catch for old-style use, where entries list is passed as first parameter
-        base = args[0]
-        upg1 = args[1]
-    except IndexError:
-        WRECK.issues.failed_upgrades.append('illegal troop upgrade in {2} at {0}:{1} - not enough arguments'.format(*stack[1]))
-    try:
-        upg2 = args[2] # Optional
-    except IndexError:
-        upg2 = 0
-    WRECK.troop_upgrades.append((current_module(), base, upg1, upg2, '{}:{}'.format(stack[1][0], stack[1][1])))
-
-# |                                                                            |
-# |    WRECK CONVENIENCE FUNCTIONS END                                         |
-# +                                                                            +
-#  \                                                                          /
-#   +------------------------------------------------------------------------+
-# endregion
-
 # region WRECK Module Overrides
 #   +------------------------------------------------------------------------+
 #  /                                                                          \
@@ -1785,6 +1844,7 @@ get_weapon_length = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue)
 get_max_ammo      = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 100) & 0xff)
 get_swing_damage  = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 50) & 0x3ff)
 get_thrust_damage = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 60) & 0x3ff)
+
 def get_abundance(y):
     abundance = (y >> 110) & 0xff
     return abundance if abundance else 100
@@ -1793,6 +1853,32 @@ def get_abundance(y):
 
 level = lambda value: WreckAggregateValue({'level':value})
 
+# WRECK-defined convenience functions
+
+def SKILLS(**argd):
+    result = 0x000000000000000000000000000000000000000000
+    for skill_name, value in argd.iteritems():
+        result |= (value & 0xF) << (getattr(WRECK.skl, skill_name) << 2)
+    return result
+
+def ATTR(_str, _agi, _int, _cha, _lvl = 0):
+    return WreckAggregateValue([('str', _str), ('agi', _agi), ('int', _int), ('cha', _cha), ('level', _lvl)])
+
+def define_troop_upgrade(*argl):
+    stack = _get_current_stack() # stack[0] points to this line, stack[1] to whatever called this function
+    args = list(argl)
+    try:
+        if isinstance(args[0], (list, tuple)):
+            args.pop(0) # Catch for old-style use, where entries list is passed as first parameter
+        base = args[0]
+        upg1 = args[1]
+    except IndexError:
+        WRECK.issues.failed_upgrades.append('illegal troop upgrade in {2} at {0}:{1} - not enough arguments'.format(*stack[1]))
+    try:
+        upg2 = args[2] # Optional
+    except IndexError:
+        upg2 = 0
+    WRECK.troop_upgrades.append((current_module(), base, upg1, upg2, '{}:{}'.format(stack[1][0], stack[1][1])))
 
 
 # |                                                                            |
@@ -1816,32 +1902,31 @@ class WRECK(object):
 
     log = logging.getLogger('WRECK').debug
 
-    config = WreckStorageObject(
-        show_help = False,        # Show command line syntax help instead of doing any processing.
-        use_color = True,         # Use colored output by default.
-        all_tags = False,         # Do not try to imitate Native Warband compiler output by adding entity tags to everything in sight.
-        test_run = False,         # Do a normal compilation run instead of a dry test run.
-        wait_enter = False,       # Do not prompt user with 'Press Enter to finish' message at the end of compilation.
-        report_duplicates = True, # Entities with duplicate identifiers will generate warnings if found in the module files.
-        warband_module = None,    # Compile as Warband module instead of Mount&Blade module. Will auto-detect if left as None.
+    config = WreckConfig()
 
-        reporting = WARNING, # WRECK will report all warnings and above by default.
+    config.add_option('test_run', 'perform a test run without creating output files', False, test_run = True)
+    config.add_option('use_color', 'use colored or b&w compiler output', None, colored = True, use_color = True, bw = False)
+    config.add_option('all_tags', 'use tags for all entities for better output match', False, tags = True, all_tags = True)
+    config.add_option('wait_enter', 'wait for user input after compilation', False, wait = True)
+    config.add_option('report_duplicates', 'report all duplicate entries', True, nodupes = False)
+    config.add_option('reporting', 'determine reporting level', WARNING, verbose = NOTICE, notices = NOTICE, notifications = NOTICE, advices = ADVICE, warnings = WARNING, mistakes = MISTAKE, errors = ERROR, silent = ERROR + 1)
+    config.add_option('warband_module', 'parse as Warband module', None, warband = True, mnb = False, autodetect = None)
+    config.add_option('performance', 'show performance data after compilation', False, performance = True)
 
-        module_path = None, # Will be set to current folder unless specified explicitly in command line
-        export_path = None, # Will be imported from module_info.py file unless specified explicitly in command line
+    config.add_argument('module_path', 'path to look for module files', argname = 'module_path')
+    config.add_argument('export_path', 'path for compiled module files', argname = 'export_path')
+    config.add_argument('game_path', 'path where game executable is located', argname = 'game_path')
+    config.add_argument('id_path', 'path to import ID files from', default = '', argname = 'id_path')
+    config.add_argument('header_path', 'path to import header files from', default = '', argname = 'header_path')
 
-        import_module_files = 'module_{module_name}.py',     # --> "./module_items.py"
-        import_header_files = 'header_{module_name}.py',     # --> "./header_items.py"
-        export_module_files = '{export_name}.{export_ext}',  # --> "./item_kinds1.txt"
-        export_id_files     = 'ID_{module_name}.py',         # --> "./ID_items.txt"
-        variables_file      = '{export_path}/variables.txt', # --> "./variables.txt"
+    config.import_module_files = 'module_{module_name}.py'
+    config.import_header_files = 'header_{module_name}.py'
+    config.export_module_files = '{export_name}.{export_ext}'
+    config.export_id_files     = 'ID_{module_name}.py'
+    config.variables_file      = '{export_path}/variables.txt'
 
-        performance  = None,
+    config.parse_module_info = True
 
-        extras = WreckStorageObject(), # Any arguments that WRECK failed to parse will be here
-
-        parse_module_info = True, # If WRECK cannot find module_info.py file, this will be set to False
-    )
 
     issues = WreckStorageObject(
         # ERROR-level issues
@@ -1994,41 +2079,11 @@ class WRECK(object):
         sys.modules['compiler'] = imp.new_module('compiler')
         cls.log('initialized fake `compiler` module for backwards compatibility')
 
+    # TODO: need to export this to WreckArgumentParser class
     @classmethod
     def initialize_config(cls):
         cls.log('initialize_config() started')
-        for index in xrange(1, len(sys.argv)):
-            option = sys.argv[index].split('=', 1)
-            option[0] = option[0].lstrip('-/').lower()
-            if option[0] == 'help': cls.config.show_help = True
-            elif option[0] == 'test': cls.config.test_run = True
-            elif option[0] == 'bw': cls.config.use_color = False
-            elif option[0] == 'tag': cls.config.all_tags = True
-            elif option[0] == 'wait': cls.config.wait_enter = True
-            elif option[0] == 'nodupe': cls.config.report_duplicates = False
-            elif option[0] == 'verbose': cls.config.reporting = EVERYTHING
-            elif option[0] == 'silent': cls.config.reporting = NOTHING
-            elif option[0].startswith('error'): cls.config.reporting = ERROR
-            elif option[0].startswith('mistake'): cls.config.reporting = MISTAKE
-            elif option[0].startswith('warning'): cls.config.reporting = WARNING
-            elif option[0].startswith('advice'): cls.config.reporting = ADVICE
-            elif option[0].startswith('notice'): cls.config.reporting = INFO
-            elif option[0] == 'warband': cls.config.warband_module = True
-            elif option[0] == 'mnb': cls.config.warband_module = False
-            elif option[0] == 'auto': cls.config.warband_module = None
-            elif len(option) > 1:
-                if option[0] == 'performance':
-                    if option[1].lower() in ('true', 'y', 'yes', '1'): cls.config.performance = True
-                    elif option[1].lower() in ('false', 'n', 'no', '0'): cls.config.performance = False
-                    else: cls.config.extras.performance = option[1]
-                elif option[0] == 'module':
-                    cls.config.module_path = option[1].rstrip('\\/')
-                elif option[0] == 'export':
-                    cls.config.export_path = option[1].rstrip('\\/')
-                else:
-                    setattr(cls.config.extras, option[0], option[1])
-            else:
-                setattr(cls.config.extras, option[0], True)
+        cls.config.parse()
 
     @classmethod
     def module_files_exist(cls, *filenames):
@@ -2038,10 +2093,8 @@ class WRECK(object):
 
     @classmethod
     def validate_config(cls):
-        """Security check function.
-
-        Will make sure that module and export paths actually exist, that module_info.py file exists in module folder,
-        and will also auto-detect module version (Warband or Mount&Blade) if necessary.
+        """
+        Make sure that module and export paths actually exist and module_info.py file exists in module folder
         """
         cls.log('validate_config() started')
         if cls.config.module_path is None:
@@ -2055,15 +2108,13 @@ class WRECK(object):
             cls.issues.mistakes.append('file "{0}/module_info.py" was not found at module path'.format(cls.config.module_path))
             cls.config.parse_module_info = False
             cls.log('file module_info.py not found at %r, ignoring', cls.config.module_path)
+        sys.path.insert(0, cls.config.module_path)
+        cls.log('module_path %r initialized as primary import source', cls.config.module_path)
+
+        # Auto-detect module type (Warband or original Mount&Blade)
         if cls.config.warband_module is None:
             cls.config.warband_module = cls.module_files_exist('module_info_pages.py', 'module_postfx.py')
             cls.log('auto-detected config.warband_module = %r', cls.config.warband_module)
-        if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules:
-            cls.config.use_color = False
-            cls.issues.notifications.append('colorama library is missing, disabling colored output')
-            cls.log('configured to use colored output but colorama library is missing on Windows')
-        sys.path.insert(0, cls.config.module_path)
-        cls.log('module_path %r initialized as primary import source', cls.config.module_path)
 
     @classmethod
     def initialize_libraries(cls):
@@ -2209,10 +2260,6 @@ class WRECK(object):
 
         cls.log('shared module namespace initialization complete')
 
-        sys.modules['compiler'].__dict__.update(cls._module_namespace)
-
-        cls.log('fake compiler module updated with contents of shared module namespace')
-
 
     @classmethod
     def preload_headers(cls):
@@ -2234,19 +2281,81 @@ class WRECK(object):
     @classmethod
     def initialize_module(cls):
         cls.log('initialize_module() started')
+
+        if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules:
+            cls.config.use_color = False
+            cls.issues.notifications.append('colorama library is missing, disabling colored output')
+            cls.log('configured to use colored output but colorama library is missing on Windows')
+
         if not cls.config.parse_module_info:
             cls.log('skipping import of module_info as it was not found at import_path')
             return
         cls.log('loading module_info file from module_path')
-        import module_info
-        data = module_info.__dict__
-        if WRECK.config.export_path is None:
+        try:
+            data = _wreck_import_hook('module_info').__dict__
+        except Exception:
+            cls.log('failed to import module_info.py file:\n%s', formatted_exception())
+            WRECK.issues.errors.append('failed to import module_info.py:\n{0}'.format(formatted_exception()))
+            return
+
+        if 'export_path' in cls.config:
+            # We evaluate export_path as relative to CURRENT dir, not module dir
+            cls.config.export_path = os.path.abspath(cls.config.export_path.rstrip(r'\/')).replace('\\', '/')
+            cls.log('applied `export_path` command line setting: %s', cls.config.export_path)
+        elif 'export_dir' in data:
             current_dir = os.getcwd()
             os.chdir(cls.config.module_path)
             cls.config.export_path = os.path.abspath(data['export_dir'].rstrip(r'\/')).replace('\\', '/')
+            cls.log('applied `export_dir` setting from module_info file: %s', cls.config.export_path)
             os.chdir(current_dir)
-            cls.log('applied `export_dir` setting from module_info file')
-        if 'write_id_files' in data:
+        else:
+            cls.config.export_path = os.getcwd()
+            cls.log('export path not defined, defaulting to current dir')
+            cls.issues.errors.append('export path not defined, using current dir but export will be disabled')
+
+        for setting in ('id_path', 'header_path'):
+            if (setting in cls.config or setting not in data) and getattr(cls.config, setting) is not None:
+                setattr(cls.config, setting, os.path.abspath(getattr(cls.config, setting).rstrip(r'\/')).replace('\\', '/'))
+                cls.log('applied `%s` command line setting: %s', setting, getattr(cls.config, setting))
+            elif setting in data:
+                current_dir = os.getcwd()
+                os.chdir(cls.config.module_path)
+                setattr(cls.config, setting, os.path.abspath(data[setting].rstrip(r'\/')).replace('\\', '/'))
+                cls.log('applied `%s` setting from module_info file: %s', setting, getattr(cls.config, setting))
+                os.chdir(current_dir)
+            else:
+                setattr(cls.config, setting, cls.config.module_path)
+                cls.log('defaulting %s to module_path', setting)
+
+        # Attempting to divine game_path
+        if 'game_path' in cls.config:
+            # We evaluate export_path as relative to CURRENT dir, not module dir
+            cls.config.game_path = os.path.abspath(cls.config.game_path.rstrip(r'\/')).replace('\\', '/')
+            cls.log('applied `game_path` command line setting: %s', cls.config.game_path)
+        elif 'game_path' in data:
+            current_dir = os.getcwd()
+            os.chdir(cls.config.module_path)
+            cls.config.game_path = os.path.abspath(data['game_path'].rstrip(r'\/')).replace('\\', '/')
+            cls.log('applied `game_path` setting from module_info file: %s', cls.config.game_path)
+            os.chdir(current_dir)
+        else:
+            current_dir = os.getcwd()
+            os.chdir(cls.config.export_path)
+            cls.config.game_path = None
+            go_up = 1
+            while go_up < 3:
+                check_path = os.path.abspath('../' * go_up + 'CommonRes')
+                if os.path.exists(check_path):
+                    cls.config.game_path = check_path
+                    cls.log('successfully auto-detected game executable folder as %s', check_path)
+                    break
+                go_up += 1
+            if cls.config.game_path is None:
+                cls.log('failed to auto-detect game executable folder, some data validity checks may be unreliable')
+                cls.issues.warnings.append('failed to detect game executable folder, WRECK won\'t check references to shared sounds and music tracks')
+            os.chdir(current_dir)
+
+        if 'export_id_files' not in cls.config and 'write_id_files' in data:
             value = data['write_id_files']
             if isinstance(value, str) and ('%s' in value):
                 value = value.replace('%s', '{module_name}')
@@ -2254,10 +2363,10 @@ class WRECK(object):
             else:
                 cls.log('applied `write_id_files` setting from module_info file')
             cls.config.export_id_files = value
-        if ('show_performance_data' in data) and (cls.config.performance is None):
+        if 'performance' not in cls.config and 'show_performance_data' in data:
             cls.config.performance = data['show_performance_data']
             cls.log('applied `show_performance_data` setting from module_info file')
-        if 'export_filename' in data:
+        if 'export_module_files' not in cls.config and 'export_filename' in data:
             value = data['export_filename']
             if isinstance(value, str) and ('%s' in value):
                 if value.endswith('.txt'): value = value[:-4] + '.{export_ext}'
@@ -2417,73 +2526,5 @@ class WRECK(object):
 #   +------------------------------------------------------------------------+
 # endregion
 
-# DONE: variable forced resolution
-
-# DONE: use WreckModule (current_module())
-# DONE: add detail to _parse_script, collect data blocks to be parsed
-# DONE: deal with encodings in imported module files
-# TODO: enhance script parser (operations, operands)
-
-# TODO: implement plugins
-# TODO: implement multiple paths in config (wreck_path, game_path, module_path, export_path, header_path, id_path)
-# TODO: implement simplified argument processing
-# DONE: add operations library, replace some WRECK constants with values from this lib, update lib at import
 # TODO: add module constants library, replace some WRECK constants with values from this lib, update lib at import
-# TODO: more detail for WreckAggregateValue, make it typed
 # TODO: convert some classes to __slots__ to decrease memory footprint
-
-# Workflow:
-#
-# CANCELLED: 1. Load all header files, provide own replacements both in header file namespace and compiler's own.
-# DONE: 1. Hijack import of header files, override some resulting data with WRECK values.
-# MOSTLY DONE: 2. Detect module version (M&B or Warband), determining the list of EntityLibraries and methods to use.
-# DONE: 2. Prepare shared globals namespace for module files.
-# DONE: 3. To optimize reference substitution, ALLOW loading ID files, but replace values with WRECK references.
-#          However these references should be "weak", i.e. they might end up undefined and this should not cause error.
-# DONE: 3. Prepare empty namespaces for ID files.
-# DONE: 4. For each module file:
-# DONE: 4.1. Load module source. Compile (?).
-# DONE: 4.2. Repeatedly attempt to execute module in separate namespace, introducing missing references.
-# DONE: 4.3. On successful execution, export resulting tuples into WarbandEntity.source property.
-# 5. For each plugin file:
-# 5.1. Load plugin source. Compile (?).
-# 5.2. Extend existing entries with plugin data.
-# 5.3. Load plugin injections into WRECK.
-# DONE: 6. For each entity:
-# DONE: 6.1. Check entity sources for syntax errors, processing injections along the way.
-# DONE: 6.2. Evaluate entity references.
-# DONE: 6.3. Link entity libraries to sources so property references can be resolved.
-# AFTER SCRIPTS ARE COMPILED 7. Allocate references for global variables and quick strings.
-# DONE: 8. Allocate references for game entities.
-# CANCELLED, WORKFLOW CHANGED 9. Check for any references with undefined value.
-# DONE: 10. Run main compilation preprocessor.
-# 11. For each plugin:
-# 11.1. Run plugin compilation preprocessor if defined (may create code injections).
-# 12. For each entity:
-# 12.1. Run entity processor on it's sources.
-# 12.1.1. Handle code-level injections from plugins.
-# 12.2. Run entity aggregator to generate resulting output.
-# 13. Run main compilation postprocessor (compile dialog states, quick strings, globals).
-# 14. For each exportable entity:
-# 14.1. Export compiled data, creating files and directories as necessary.
-# 15. For each exportable entity with ID files:
-# 15.1. Generate, sort and export ID file for compatibility mode.
-
-# Possible solutions:
-#
-# DONE: 4. Remake parser entries, these should include validators instead of declarators, making parsing more streamlined.
-# IMPOSSIBLE: 5. Since we're virtualizing import of module files, can we finally link entries to line numbers?
-# DONE FOR MODULE ONLY ATM: 6. Manage code injections gracefully on the fly instead of a separate pass?
-# PARTIALLY DONE: 7. Trace plugin that injected current code? Inherit list() with own class, linking back to file?
-# 8. Clearly separate module-level and code-level injections? Still need to maintain old syntax though.
-# IMPOSSIBLE: 9. Streamline steps 4, 5 and 6?
-# 10. Expand exception classes in more detail!
-
-if __name__ == '__main__':
-    print current_module()
-    with current_module('level1'):
-        print current_module()
-        with current_module('level2'):
-            print current_module()
-        print current_module()
-    print current_module()
