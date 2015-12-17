@@ -511,6 +511,13 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                         WRECK.log('executing compiled module %s', module_name)
                         exec(module_bytecode, module.__dict__)
                         successful = True
+                    except WreckInterruptPlugin as e:
+                        WRECK.log('module %s called register_plugin(), interrupting evaluation and creating new plugin object', module_name)
+                        WRECK.plugins[module_name] = WreckPlugin(module_name, mpath, module_bytecode, module_code)
+                        WRECK.log('temporarily replacing %s with a dummy blank module', module_name)
+                        module = imp.new_module(module_name)
+                        module.__dict__['__file__'] = mpath
+                        successful = True
                     except NameError as e:
                         exc_file, exc_line, exc_func, exc_text = _get_exception_details()
                         match = _detect_missing_var_name.match(e.message)
@@ -528,7 +535,7 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                         module.__dict__.clear()
                         module.__dict__.update(namespace_backup)
                         WRECK.log('restored %s namespace to original condition, module ready for another execution attempt', module_name)
-                WRECK.log('module %s successfully imported')
+                WRECK.log('module %s successfully imported', module_name)
             sys.modules[module_name] = module
         else:
             if gvars is None: gvars = imp.new_module(module_name).__dict__
@@ -1640,6 +1647,20 @@ class WreckScript(object):
                 pass
 
 
+class WreckPlugin(object):
+
+    code = None
+    source = None
+    name = None
+    path = None
+
+    def __init__(self, name, path, code, source = None):
+        self.name = name
+        self.path = path
+        self.code = code
+        self.source = source
+
+
 # |                                                                            |
 # |    COMPILER BASE CLASSES END                                               |
 # +                                                                            +
@@ -1957,8 +1978,10 @@ class WRECK(object):
     troop_upgrades = []
     scripting_blocks = []
 
-    plugins = OrderedDict()
+    plugins = OrderedDict() # module_name => WreckPlugin
     injections = {}
+
+    register_plugins = True
 
     @classmethod
     def initialize_wreck(cls):
@@ -2155,6 +2178,10 @@ class WRECK(object):
             'get_swing_damage': get_swing_damage,
             'get_thrust_damage': get_thrust_damage,
             'get_abundance': get_abundance,
+            'register_plugin': register_plugin,
+            'require_plugin': require_plugin,
+            'export_plugin_globals': export_plugin_globals,
+            'extend_syntax': extend_syntax,
         })
 
         # Initialize register modules

@@ -6,3 +6,6 @@ export_dir = "../compiled/"
 #export_dir = "C:/Program Files/Mount&Blade/Modules/Native/"
 
 test = script_generate_values
+
+import plugin_test
+import plugin_test2
