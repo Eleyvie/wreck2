@@ -226,7 +226,7 @@ class WreckAggregateValue(dict):
 def parse_int(value):
     """Converts a single value to integer, or tuple/list of values to list of integers recursively."""
     if isinstance(value, list) or isinstance(value, tuple): return map(parse_int, value) # Recursion
-    if isinstance(value, WreckVariable) and value.is_static and (value.module is not None) and value.module['opmask']:
+    if isinstance(value, WreckVariable) and value.is_static and (value.library is not None) and value.library['opmask']:
         return int(value) & 0xffffffff # Disable opmask if present, otherwise leave value as it is
     return int(value)
 
@@ -279,7 +279,7 @@ def unparse_wp_aggregate(value):
     Converts binary-packed troop weapon proficiencies into WRECK aggregate.
     """
     if isinstance(value, WreckAggregateValue): return value
-    return WreckAggregateValue([(i, (value >> (10*i)) & 0x3FF) for i in xrange(WRECK.num_weapon_proficiencies)])
+    return WreckAggregateValue([(i, (value >> (10*i)) & 0x3FF) for i in xrange(WRECK.constants.num_weapon_proficiencies)])
 
 def unparse_terrain_aggregate(value):
     """WreckAggregateValue helper function.
@@ -366,7 +366,7 @@ def _import_sanitize_overrides(data):
             WRECK._module_namespace[key] = data[key] = unparse_attr_aggregate(data[key])
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
         elif (key == 'num_weapon_proficiencies'):
-            WRECK.num_weapon_proficiencies = WRECK._module_namespace[key] = data[key]
+            WRECK.constants.num_weapon_proficiencies = WRECK._module_namespace[key] = data[key]
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
 
 def _import_sanitize_header_skills(data):
@@ -399,11 +399,15 @@ def _import_sanitize_header_operations(data):
         if (opname in data) and (opname not in data['depth_operations']):
             data['depth_operations'].append(data[opname])
             WRECK.log('added missing operation %s to depth_operations list', opname)
-    #neg_value = data.get('neg', 0x80000000)
-    #this_or_next_value = data.get('this_or_next', 0x40000000)
-    # TODO: handle neg and this_or_next values (need to keep track of them)
+    WRECK.constants.lhs_operations = data['lhs_operations']
+    WRECK.constants.global_lhs_operations = data['global_lhs_operations']
+    WRECK.constants.canfail_operations = data['canfail_operations']
+    WRECK.constants.depth_operations = data['depth_operations']
     for opname, opcode in data.iteritems():
-        if type(opcode) == int:
+        if opname in ('neg', 'this_or_next'):
+            setattr(WRECK.constants, opname, opcode)
+            WRECK.log('refreshed compiler constant: %s = %r', opname, opcode)
+        elif type(opcode) == int:
             WRECK.reference_operations[opcode] = opname
             setattr(WRECK.libraries._opcode, opname, opcode)
             WRECK.log('replaced value: %s = %r (was %r)', opname, getattr(WRECK.libraries._opcode, opname), opcode)
@@ -500,7 +504,7 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
                         successful = True
                     except WreckInterruptPlugin as e:
                         WRECK.log('module %s called register_plugin(), interrupting evaluation and creating new plugin object', module_name)
-                        WRECK.plugins[module_name] = WreckPlugin(module_name, mpath, module_bytecode, module_code)
+                        WRECK.plugins[current_module()] = WreckPlugin(current_module(), mpath, module_bytecode, module_code)
                         WRECK.log('temporarily replacing %s with a dummy blank module', module_name)
                         module = imp.new_module(module_name)
                         module.__dict__['__file__'] = mpath
@@ -533,29 +537,28 @@ def _wreck_import_hook(module_name, gvars = None, lvars = None, fromlist = [], l
 
 
 # TODO: implement plugins functionality
-def _import_sanitize_plugin(data):
-    # FIXME: load `injection` dict
-    # FIXME: load data entries for all libraries
-    pass
-
 def register_plugin(name = None, glob = None):
-    # FIXME: implement register_plugin()
     if WRECK.register_plugins:
         # If this is the first run for our plugin, we interrupt it's execution with a custom exception.
         # This exception will be caught by our import hook and plugin will be stored for later.
-
-        stack = _get_current_stack()
-        raise WreckInterruptPlugin(stack[1][2])
+        raise WreckInterruptPlugin()
 
 def require_plugin(*req_list):
-    # FIXME: implement require_plugin()
-    pass
+    if WRECK.register_plugins:
+        WRECK.issues.errors.append('failed to apply plugin {0!r} due to syntax error: require_plugin() called before register_plugin()'.format(current_module()))
+        WRECK.log('%r.require_plugin(%r) called while WRECK.register_plugins == True', current_module(), req_list)
+        raise WreckTerminatePlugin()
+    for req_name in req_list:
+        if req_name not in WRECK.plugins:
+            WRECK.issues.errors.append('failed to apply plugin {0!r} due to missing requirement: {1!r}'.format(current_module(), req_name))
+            raise WreckTerminatePlugin()
 
 def export_plugin_globals(**exported):
-    # FIXME: implement export_plugin_globals()
-    pass
+    with current_module('exported_globals'):
+        _import_sanitize_overrides(exported)
+        WRECK._module_namespace.update(exported)
 
-def extend_syntax(callback):
+def extend_syntax(*callbacks):
     # FIXME: implement extend_syntax()
     pass
 
@@ -896,6 +899,9 @@ class WreckException(Exception):
 class WreckInterruptPlugin(Exception):
     pass
 
+class WreckTerminatePlugin(WreckInterruptPlugin):
+    pass
+
 
 class current_module(object):
 
@@ -1155,8 +1161,8 @@ class WreckVariable(object):
     value = None
     operation = None
 
-    def __init__(self, module = None, name = None, value = None, operation = None, static = True, required = True):
-        self.module = module
+    def __init__(self, library = None, name = None, value = None, operation = None, static = True, required = True):
+        self.library = library
         self.name = name
         self.references = set()
         self.is_required = required
@@ -1209,8 +1215,8 @@ class WreckVariable(object):
 
     def formatted_name(self):
         if self.is_expression: return '<expr>'
-        if self.module is None: return '?.%s' % self.name
-        return '%s.%s' % (self.module['basename'], self.name)
+        if self.library is None: return '?.%s' % self.name
+        return '%s.%s' % (self.library['basename'], self.name)
 
     def __int__(self):
         try:
@@ -1315,6 +1321,52 @@ class WreckVariable(object):
             raise WreckException('failed to generate dynamic code for expression %r' % self, formatted_exception())
 
 
+# TODO: decide what to do with WreckOpcodes
+class WreckOpcode(WreckVariable):
+
+    defines  = False
+    assigns  = False
+    can_fail = False
+    depth    = None
+
+    neg = False
+    this_or_next = False
+
+    base_opcode = 0
+
+    def __init__(self, library = None, name = None, value = None, *argl, **argd):
+        super(WreckOpcode, self).__init__(library, name, value)
+        self.neg = bool(value & WRECK.constants.neg)
+        self.this_or_next = bool(value & WRECK.constants.this_or_next)
+        self.base_opcode = value & (0xffffffff ^ (WRECK.constants.neg | WRECK.constants.this_or_next))
+        if value in WRECK.constants.lhs_ops:
+            self.defines = self.assigns = True
+        if value in WRECK.constants.global_lhs_ops:
+            self.assigns = True
+        if value in WRECK.constants.canfail_ops:
+            self.can_fail = True
+        if value in WRECK.constants.depth_ops:
+            self.depth_change = 1
+        elif value == WRECK.constants.try_end:
+            self.depth_change = -1
+        elif value == WRECK.constants.else_try:
+            self.depth_change = 0
+
+    def __or__(self, other):
+        if other == WRECK.constants.neg:
+            # TODO: generate mistake when double neg| is applied
+            #if self.neg:
+            #    stack = _get_current_stack()
+            #    WRECK.issues.mistakes.append()
+            return WreckOpcode(name = 'neg|' + self.name, value = self.value | other)
+        if other == WRECK.constants.this_or_next:
+            return WreckOpcode(name = 'this_or_next|' + self.name, value = self.value | this_or_next)
+
+    __ror__ = __or__
+
+    __repr__ = lambda self: self.name
+
+
 class WreckProperty(WreckVariable):
     """A subclass of WreckVariable, providing compile-time hooks to actual values in module files.
 
@@ -1348,9 +1400,9 @@ class WreckProperty(WreckVariable):
 
     def __int__(self):
         try:
-            if not self.module['sanitized']:
-                raise WreckException('cannot evaluate property %r: module %r has no sanitized data source' % (self, self.module))
-            result = self.module['sanitized'][int(self.entity)]
+            if not self.library['sanitized']:
+                raise WreckException('cannot evaluate property %r: library %r has no sanitized data source' % (self, self.library))
+            result = self.library['sanitized'][int(self.entity)]
         except WreckException as e: raise WreckException('failed to calculate property %s' % repr(self), *e.args)
         except Exception as e: raise WreckException('failed to calculate property %s' % repr(self), formatted_exception())
         for key, convertor, default in self.operation:
@@ -1658,7 +1710,7 @@ class WreckLibrary(object):
         if name in self.__data.entries:
             variable = self.__data.entries[name]
         else:
-            self.__data.entries[name] = variable = self.__data.varclass(module = self, name = name, **self.__data.defaults)
+            self.__data.entries[name] = variable = self.__data.varclass(library = self, name = name, **self.__data.defaults)
             self.__data.unassigned.add(name)
             if not self.__data.extendable:
                 WRECK.issues.illegal_refs[variable.formatted_name()] = variable
@@ -1673,7 +1725,7 @@ class WreckLibrary(object):
         if name in self.__data.entries:
             self.__data.entries[name].value = value
         else:
-            self.__data.entries[name] = variable = self.__data.varclass(module = self, name = name, value = value, **self.__data.defaults)
+            self.__data.entries[name] = variable = self.__data.varclass(library = self, name = name, value = value, **self.__data.defaults)
             if not self.__data.extendable:
                 WRECK.issues.illegal_refs[variable.formatted_name()] = variable
         if name in self.__data.unassigned: self.__data.unassigned.remove(name)
@@ -1927,6 +1979,12 @@ class WRECK(object):
 
     config.parse_module_info = True
 
+    # Some critical constants that we need to keep track of
+    constants = WreckStorageObject(
+        neg          = 0x80000000,
+        this_or_next = 0x40000000,
+        num_weapon_proficiencies = 6,
+    )
 
     issues = WreckStorageObject(
         # ERROR-level issues
@@ -2050,8 +2108,6 @@ class WRECK(object):
 
     reference_triggers = {} # Filled when importing header_triggers, used to convert trigger condition values back to human-readable strings
     reference_operations = {} # Filled when importing header_operations, used to convert operation codes back to human-readable strings
-
-    num_weapon_proficiencies = 6 # Default value, will be overridden from header_troops
 
     # This dict contains pre-made namespace for imported modules.
     _module_namespace = {}
@@ -2186,7 +2242,7 @@ class WRECK(object):
             'SKILLS': SKILLS,
             'define_troop_upgrade': define_troop_upgrade,
             'inject': inject,
-            'num_weapon_proficiencies': cls.num_weapon_proficiencies,
+            'num_weapon_proficiencies': cls.constants.num_weapon_proficiencies,
         })
 
         cls.log('updating module overrides with WRECK replacements for some header-defined objects')
@@ -2327,34 +2383,6 @@ class WRECK(object):
                 setattr(cls.config, setting, cls.config.module_path)
                 cls.log('defaulting %s to module_path', setting)
 
-        # Attempting to divine game_path
-        if 'game_path' in cls.config:
-            # We evaluate export_path as relative to CURRENT dir, not module dir
-            cls.config.game_path = os.path.abspath(cls.config.game_path.rstrip(r'\/')).replace('\\', '/')
-            cls.log('applied `game_path` command line setting: %s', cls.config.game_path)
-        elif 'game_path' in data:
-            current_dir = os.getcwd()
-            os.chdir(cls.config.module_path)
-            cls.config.game_path = os.path.abspath(data['game_path'].rstrip(r'\/')).replace('\\', '/')
-            cls.log('applied `game_path` setting from module_info file: %s', cls.config.game_path)
-            os.chdir(current_dir)
-        else:
-            current_dir = os.getcwd()
-            os.chdir(cls.config.export_path)
-            cls.config.game_path = None
-            go_up = 1
-            while go_up < 3:
-                check_path = os.path.abspath('../' * go_up + 'CommonRes')
-                if os.path.exists(check_path):
-                    cls.config.game_path = check_path
-                    cls.log('successfully auto-detected game executable folder as %s', check_path)
-                    break
-                go_up += 1
-            if cls.config.game_path is None:
-                cls.log('failed to auto-detect game executable folder, some data validity checks may be unreliable')
-                cls.issues.warnings.append('failed to detect game executable folder, WRECK won\'t check references to shared sounds and music tracks')
-            os.chdir(current_dir)
-
         if 'export_id_files' not in cls.config and 'write_id_files' in data:
             value = data['write_id_files']
             if isinstance(value, str) and ('%s' in value):
@@ -2387,6 +2415,34 @@ class WRECK(object):
             cls.issues.errors.append('export path "{0}" does not exist'.format(cls.config.export_path))
             cls.config.export_path = None
         if cls.config.export_path is not None:
+            # Attempting to divine game_path
+            if 'game_path' in cls.config:
+                # We evaluate export_path as relative to CURRENT dir, not module dir
+                cls.config.game_path = os.path.abspath(cls.config.game_path.rstrip(r'\/')).replace('\\', '/')
+                cls.log('applied `game_path` command line setting: %s', cls.config.game_path)
+            elif 'game_path' in data:
+                current_dir = os.getcwd()
+                os.chdir(cls.config.module_path)
+                cls.config.game_path = os.path.abspath(data['game_path'].rstrip(r'\/')).replace('\\', '/')
+                cls.log('applied `game_path` setting from module_info file: %s', cls.config.game_path)
+                os.chdir(current_dir)
+            else:
+                current_dir = os.getcwd()
+                os.chdir(cls.config.export_path)
+                cls.config.game_path = None
+                go_up = 1
+                while go_up < 3:
+                    check_path = os.path.abspath('../' * go_up + 'CommonRes')
+                    if os.path.exists(check_path):
+                        cls.config.game_path = check_path
+                        cls.log('successfully auto-detected game executable folder as %s', check_path)
+                        break
+                    go_up += 1
+                if cls.config.game_path is None:
+                    cls.log('failed to auto-detect game executable folder, some data validity checks may be unreliable')
+                    cls.issues.warnings.append('failed to detect game executable folder, WRECK won\'t check references to shared sounds and music tracks')
+                os.chdir(current_dir)
+            # Attempting to check module.ini file
             module_ini = '/'.join([cls.config.export_path, 'module.ini'])
             if not os.path.exists(module_ini):
                 cls.issues.warnings.append('could not find module.ini file at export destination'.format(module_ini))

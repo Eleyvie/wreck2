@@ -28,8 +28,9 @@ WRECK WORKFLOW
     + apply `write_id_files`, `show_performance_data` and `export_filename` config options from module_info.py
     + disallow plugins from executing properly, store them for later processing
     - allow override of most configuration settings from module_info.py file
-        ? maybe only do command line parsing AFTER module_info.py to ensure proper overrides
-        ? we will still need to check for `module_path` and `help` in command line before doing anything else
+        + maybe only do command line parsing AFTER module_info.py to ensure proper overrides
+        + need to check for `module_path` before doing anything else
+        - need to check for `help` before doing anything else
 * Validate module settings:
     + check that export_path exists and is writeable
     + check if module.ini file is present at export_path, warn if it doesn't
