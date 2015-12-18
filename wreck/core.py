@@ -11,18 +11,19 @@ __version__ = "$Revision$"
 # $Source$
 
 # region Import Statements
-from traceback import format_exc as formatted_exception, extract_tb as extract_traceback
-from inspect import currentframe as inspect_currentframe, getmembers as inspect_getmembers
+from traceback import format_exc as formatted_exception
 import inspect
 import os
 import sys
 import imp
 import re
-import time
 import logging
 from collections import OrderedDict
+
 try: import colorama
 except ImportError: pass
+
+import maths
 # endregion
 
 # region Compiler Standard Constants
@@ -184,11 +185,66 @@ def _get_current_stack():
     return map(lambda i: (i[1], i[2], i[3], i[4][0]), inspect.stack())[1:]
 
 
+class WreckAggregateItem(maths.WreckAggregateValue):
+    fields = {
+        'weight': (
+            lambda pck: 0.25 * ((pck >> WRECK.constants.ibf_weight_bits) & WRECK.constants.ibf_armor_mask),
+            lambda val: (int(4 * val) & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_weight_bits,
+        ),
+        'head': (
+            lambda pck: (pck >> WRECK.constants.ibf_head_armor_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_head_armor_bits,
+        ),
+        'body': (
+            lambda pck: ((pck >> WRECK.constants.ibf_body_armor_bits) & WRECK.constants.ibf_armor_mask),
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_body_armor_bits,
+        ),
+        'leg': (
+            lambda pck: (pck >> WRECK.constants.ibf_leg_armor_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_leg_armor_bits,
+        ),
+        'diff': (
+            lambda pck: (pck >> WRECK.constants.ibf_difficulty_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_difficulty_bits,
+        ),
+        'hp': (
+            lambda pck: (pck >> WRECK.constants.ibf_hitpoints_bits) & WRECK.constants.ibf_hitpoints_mask & 0x3ff,
+            lambda val: (val & WRECK.constants.ibf_hitpoints_mask) << WRECK.constants.ibf_hitpoints_bits,
+        ),
+        'speed': (
+            lambda pck: (pck >> WRECK.constants.ibf_speed_rating_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_speed_rating_bits,
+        ),
+        'msspd': (
+            lambda pck: (pck >> WRECK.constants.ibf_shoot_speed_bits) & WRECK.constants.ibf_10bit_mask,
+            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.ibf_shoot_speed_bits,
+        ),
+        'size': (
+            lambda pck: (pck >> WRECK.constants.ibf_weapon_length_bits) & WRECK.constants.ibf_10bit_mask,
+            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.ibf_weapon_length_bits,
+        ),
+        'qty': (
+            lambda pck: (pck >> WRECK.constants.ibf_max_ammo_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_max_ammo_bits,
+        ),
+        'swing': (
+            lambda pck: (pck >> WRECK.constants.ibf_swing_damage_bits) & WRECK.constants.ibf_damage_mask,
+            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.ibf_swing_damage_bits,
+        ),
+        'thrust': (
+            lambda pck: (pck >> WRECK.constants.ibf_thrust_damage_bits) & WRECK.constants.ibf_damage_mask,
+            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.ibf_thrust_damage_bits,
+        ),
+        'abundance': (
+            lambda pck: (pck >> WRECK.constants.ibf_abundance_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_abundance_bits,
+        ),
+    }
+
 # TODO: need to expand this to multiple subclasses, conceal them as int values from module code
 class WreckAggregateValue(dict):
     """
     A wrapper class for some combined values in Warband modules.
-
     This class is used to handle various pipe-connected parameter lists in Warband module files, like item properties
     and troop attribute/skill/proficiencies. Vanilla Warband compile combines those parameters into a single value with
     binary OR operation (pipe, "|"). WRECK uses a different approach, keeping the individual values as keys to an
@@ -206,7 +262,6 @@ class WreckAggregateValue(dict):
         return result
 
     __ror__ = __radd__ = __add__ = __or__
-
 
 # |                                                                            |
 # |    COMPILER DATA WRAPPERS END                                              |
@@ -236,6 +291,7 @@ internal_identifier = lambda name: external_identifier(name).replace('=','_').lo
 
 _detect_missing_var_name = re.compile("^[^']+'(\w+)'")
 _detect_file_encoding = re.compile('^#(.*coding\s*[:=]\s*([\w\d\-]+)(?:[^\w\d\-].*|$))', re.MULTILINE)
+
 
 def unparse_item_aggregate(value):
     """WreckAggregateValue helper function.
@@ -957,6 +1013,24 @@ class WreckStorageObject(object):
     def __iter__(self):
         return self.__dict__.itervalues()
 
+    def __getitem__(self, key):
+        return self.__dict__[key]
+
+    def __setitem__(self, key, value):
+        self.__dict__[key] = value
+
+    def __delitem__(self, key):
+        del self.__dict__[key]
+
+    def __len__(self):
+        return len(self.__dict__)
+
+    def __contains__(self, key):
+        return key in self.__dict__
+
+    def update(self, values):
+        self.__dict__.update(values)
+
 
 class WreckConfig(object):
     __options = None
@@ -1125,7 +1199,6 @@ class WreckOperation(object):
         return 'WreckOperation[%s]' % self.shorthand
 
     def compile(self, dest, *operands):
-        global _wreck_op_parser
         code = map(lambda el: int(el.format(*operands, dest = dest)) if isinstance(el, str) else el, self.bytecode)
         return self.opcount, code
 
@@ -1883,22 +1956,71 @@ food_quality   = lambda x: WreckAggregateValue([('head', x)])
 abundance      = lambda x: WreckAggregateValue([('abundance', x)])
 accuracy       = lambda x: WreckAggregateValue([('leg', x)])
 
-get_weight = lambda y: y.get('weight', 0.0) if isinstance(y, WreckAggregateValue) else 0.25 * ((y >> 24) & 0xff)
-
-get_head_armor    = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else (y & 0xff)
-get_body_armor    = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 8) & 0xff)
-get_leg_armor     = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 16) & 0xff)
-get_difficulty    = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 32) & 0xff)
-get_hit_points    = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 40) & 0xffff)
-get_speed_rating  = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 80) & 0xff)
-get_missile_speed = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 90) & 0x3ff)
-get_weapon_length = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else (((y >> 70) & 0x3ff))
-get_max_ammo      = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 100) & 0xff)
-get_swing_damage  = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 50) & 0x3ff)
-get_thrust_damage = lambda y: y.get('', 0) if isinstance(y, WreckAggregateValue) else ((y >> 60) & 0x3ff)
-
+def get_weight(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('weight', 0.0)
+    else:
+        return 0.25 * ((y >> WRECK.constants.ibf_weight_bits) & WRECK.constants.ibf_armor_mask)
+def get_head_armor(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('head',   0)
+    else:
+        return ((y >> WRECK.constants.ibf_head_armor_bits) & WRECK.constants.ibf_armor_mask)
+def get_body_armor(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('body',   0)
+    else:
+        return ((y >> WRECK.constants.ibf_body_armor_bits) & WRECK.constants.ibf_armor_mask)
+def get_leg_armor(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('leg',    0)
+    else:
+        return ((y >> WRECK.constants.ibf_leg_armor_bits) & WRECK.constants.ibf_armor_mask)
+def get_difficulty(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('diff',   0)
+    else:
+        return ((y >> WRECK.constants.ibf_difficulty_bits) & WRECK.constants.ibf_armor_mask)
+def get_hit_points(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('hp',     0)
+    else:
+        return ((y >> WRECK.constants.ibf_hitpoints_bits) & WRECK.constants.ibf_hitpoints_mask)
+def get_speed_rating(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('speed',  0)
+    else:
+        return ((y >> WRECK.constants.iwf_speed_rating_bits) & WRECK.constants.ibf_armor_mask)
+def get_missile_speed(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('msspd',  0)
+    else:
+        return ((y >> WRECK.constants.iwf_shoot_speed_bits) & WRECK.constants.ibf_10bit_mask)
+def get_weapon_length(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('size',   0)
+    else:
+        return ((y >> WRECK.constants.iwf_weapon_length_bits) & WRECK.constants.ibf_10bit_mask)
+def get_max_ammo(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('qty',    0)
+    else:
+        return ((y >> WRECK.constants.iwf_max_ammo_bits) & WRECK.constants.ibf_armor_mask)
+def get_swing_damage(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('swing',  0)
+    else:
+        return ((y >> WRECK.constants.iwf_swing_damage_bits) & WRECK.constants.ibf_damage_mask)
+def get_thrust_damage(y):
+    if isinstance(y, WreckAggregateValue):
+        return y.get('thrust', 0)
+    else:
+        return ((y >> WRECK.constants.iwf_thrust_damage_bits) & WRECK.constants.ibf_damage_mask)
 def get_abundance(y):
-    abundance = (y >> 110) & 0xff
+    if isinstance(y, WreckAggregateValue):
+        abundance = y.get('abundance', 100)
+    else:
+        abundance = (y >> WRECK.constants.iwf_abundance_bits) & WRECK.constants.ibf_armor_mask
     return abundance if abundance else 100
 
 # Overrides for functions and constants in header_troops.py
@@ -2383,6 +2505,9 @@ class WRECK(object):
                 setattr(cls.config, setting, cls.config.module_path)
                 cls.log('defaulting %s to module_path', setting)
 
+        if 'game_path' not in cls.config and 'game_path' in data:
+            cls.config.game_path = data['game_path'] # We'll validate that later
+
         if 'export_id_files' not in cls.config and 'write_id_files' in data:
             value = data['write_id_files']
             if isinstance(value, str) and ('%s' in value):
@@ -2416,16 +2541,10 @@ class WRECK(object):
             cls.config.export_path = None
         if cls.config.export_path is not None:
             # Attempting to divine game_path
-            if 'game_path' in cls.config:
+            if cls.config.game_path is not None:
                 # We evaluate export_path as relative to CURRENT dir, not module dir
                 cls.config.game_path = os.path.abspath(cls.config.game_path.rstrip(r'\/')).replace('\\', '/')
-                cls.log('applied `game_path` command line setting: %s', cls.config.game_path)
-            elif 'game_path' in data:
-                current_dir = os.getcwd()
-                os.chdir(cls.config.module_path)
-                cls.config.game_path = os.path.abspath(data['game_path'].rstrip(r'\/')).replace('\\', '/')
-                cls.log('applied `game_path` setting from module_info file: %s', cls.config.game_path)
-                os.chdir(current_dir)
+                cls.log('applied `game_path` setting: %s', cls.config.game_path)
             else:
                 current_dir = os.getcwd()
                 os.chdir(cls.config.export_path)
@@ -2478,7 +2597,7 @@ class WRECK(object):
                     with open(variables_txt, 'r') as f:
                         pass
                         #variables = filter(lambda st: st, map(lambda st: st.strip(), f.readlines()))
-                        # FIXME: use this data
+                        # FIXME: actually use data from variables.txt to initialize globals
                 except IOError as e:
                     cls.log('failed to load variables.txt file:\n%s', formatted_exception())
                     cls.issues.errors.append('I/O error trying to read "{0}": {1}'.format(variables_txt, e.message))
@@ -2498,7 +2617,7 @@ class WRECK(object):
     @classmethod
     def apply_plugins(cls):
         cls.log('apply_plugins() started')
-        pass # TODO: implement
+        pass # TODO: implement apply_plugins()
 
     @classmethod
     def validate_module_data(cls):

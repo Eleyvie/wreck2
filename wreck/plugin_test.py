@@ -10,7 +10,7 @@ Email: alex@lomskih.net
 __version__ = "$Revision$"
 # $Source$
 
-# TODO #1: plugin should be able to register without importing compiler library
+# DONE #1: plugin should be able to register without importing compiler library
 register_plugin()
 
 
@@ -18,8 +18,8 @@ def plugin_internal_function():
     pass
 
 
-# TODO #2: plugin should be able to register it's globals, and they should be available in plugin namespace as well
-register_globals(
+# DONE #2: plugin should be able to register it's globals, and they should be available in plugin namespace as well
+export_plugin_globals(
     plugin_internal_function,
     test_value1 = 10,
     test_value2 = 20,
