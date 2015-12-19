@@ -11,8 +11,9 @@ __version__ = "$Revision$"
 # $Source$
 
 # region Import Statements
-from traceback import format_exc as formatted_exception
+from traceback import format_exc as formatted_exception, extract_tb as extract_traceback
 import inspect
+import traceback
 import os
 import sys
 import imp
@@ -20,10 +21,14 @@ import re
 import logging
 from collections import OrderedDict
 
-try: import colorama
-except ImportError: pass
+try:
+    import colorama
+except ImportError:
+    pass
+else:
+    colorama.init()
 
-import maths
+import maths # wrecked maths
 # endregion
 
 # region Compiler Standard Constants
@@ -212,56 +217,151 @@ class WreckAggregateItem(maths.WreckAggregateValue):
             lambda val: (val & WRECK.constants.ibf_hitpoints_mask) << WRECK.constants.ibf_hitpoints_bits,
         ),
         'speed': (
-            lambda pck: (pck >> WRECK.constants.ibf_speed_rating_bits) & WRECK.constants.ibf_armor_mask,
-            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_speed_rating_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_speed_rating_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.iwf_speed_rating_bits,
         ),
         'msspd': (
-            lambda pck: (pck >> WRECK.constants.ibf_shoot_speed_bits) & WRECK.constants.ibf_10bit_mask,
-            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.ibf_shoot_speed_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_shoot_speed_bits) & WRECK.constants.ibf_10bit_mask,
+            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.iwf_shoot_speed_bits,
         ),
         'size': (
-            lambda pck: (pck >> WRECK.constants.ibf_weapon_length_bits) & WRECK.constants.ibf_10bit_mask,
-            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.ibf_weapon_length_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_weapon_length_bits) & WRECK.constants.ibf_10bit_mask,
+            lambda val: (val & WRECK.constants.ibf_10bit_mask) << WRECK.constants.iwf_weapon_length_bits,
         ),
         'qty': (
-            lambda pck: (pck >> WRECK.constants.ibf_max_ammo_bits) & WRECK.constants.ibf_armor_mask,
-            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_max_ammo_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_max_ammo_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.iwf_max_ammo_bits,
         ),
         'swing': (
-            lambda pck: (pck >> WRECK.constants.ibf_swing_damage_bits) & WRECK.constants.ibf_damage_mask,
-            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.ibf_swing_damage_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_swing_damage_bits) & WRECK.constants.ibf_damage_mask,
+            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.iwf_swing_damage_bits,
         ),
         'thrust': (
-            lambda pck: (pck >> WRECK.constants.ibf_thrust_damage_bits) & WRECK.constants.ibf_damage_mask,
-            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.ibf_thrust_damage_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_thrust_damage_bits) & WRECK.constants.ibf_damage_mask,
+            lambda val: (val & WRECK.constants.ibf_damage_mask) << WRECK.constants.iwf_thrust_damage_bits,
         ),
         'abundance': (
-            lambda pck: (pck >> WRECK.constants.ibf_abundance_bits) & WRECK.constants.ibf_armor_mask,
-            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.ibf_abundance_bits,
+            lambda pck: (pck >> WRECK.constants.iwf_abundance_bits) & WRECK.constants.ibf_armor_mask,
+            lambda val: (val & WRECK.constants.ibf_armor_mask) << WRECK.constants.iwf_abundance_bits,
         ),
     }
 
-# TODO: need to expand this to multiple subclasses, conceal them as int values from module code
-class WreckAggregateValue(dict):
-    """
-    A wrapper class for some combined values in Warband modules.
-    This class is used to handle various pipe-connected parameter lists in Warband module files, like item properties
-    and troop attribute/skill/proficiencies. Vanilla Warband compile combines those parameters into a single value with
-    binary OR operation (pipe, "|"). WRECK uses a different approach, keeping the individual values as keys to an
-    aggregate dictionary, making it easier to interact with those values, but also preventing various value overflow
-    issues.
-    """
+class WreckAggregateAttr(maths.WreckAggregateValue):
+    fields = {
+        'str': (
+            lambda pck: pck & 0xff,
+            lambda val: val & 0xff,
+        ),
+        'agi': (
+            lambda pck: (pck >> 8) & 0xff,
+            lambda val: (val & 0xff) << 8,
+        ),
+        'int': (
+            lambda pck: (pck >> 16) & 0xff,
+            lambda val: (val & 0xff) << 16,
+        ),
+        'cha': (
+            lambda pck: (pck >> 24) & 0xff,
+            lambda val: (val & 0xff) << 24,
+        ),
+        'level': (
+            lambda pck: (pck >> 32) & 0xff,
+            lambda val: (val & 0xff) << 32,
+        ),
+    }
 
-    def __or__(self, other):
-        if not other: return self
-        result = WreckAggregateValue(self)
-        for key, value in other.iteritems():
-            if type(value) == float: result[key] = max(result.get(key, 0.0), value)
-            else: result[key] = result.get(key, 0) | value
-        #result.update(other)
-        return result
+class WreckAggregateWP(maths.WreckAggregateValue):
 
-    __ror__ = __radd__ = __add__ = __or__
+    fields = dict(
+        (index, (lambda pck: pck >> (10 * index) & 0x3ff, lambda val: (val & 0x3ff) << (10 * index))) for index in xrange(7)
+    )
+
+class WreckAggregateTerrain(maths.WreckAggregateValue):
+    fields = {
+        'terrain_seed': (
+            lambda pck: int('0x0%s' % pck[-4:], 16) if isinstance(pck, str) else (pck & 0xffffffff),
+            lambda val: 0,
+        ),
+        'river_seed': (
+            lambda pck: int('0x0%s' % pck[-12:-8], 16) if isinstance(pck, str) else ((pck >> 32) & 0x7fffffff),
+            lambda val: 0,
+        ),
+        'flora_seed': (
+            lambda pck: int('0x0%s' % pck[-20:-16], 16) if isinstance(pck, str) else ((pck >> 64) & 0xffffffff),
+            lambda val: 0,
+        ),
+        'size_x': (
+            lambda pck: (int('0x0%s' % pck[-29:-24], 16) & 0x3ff) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'size_y': (
+            lambda pck: ((int('0x0%s' % pck[-29:-24], 16) >> 10) & 0x3ff) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'valley': (
+            lambda pck: ((int('0x0%s' % pck[-39:-32], 16) >> 0) & 0x7f) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'hill_height': (
+            lambda pck: ((int('0x0%s' % pck[-39:-32], 16) >> 7) & 0x7f) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'ruggedness': (
+            lambda pck: ((int('0x0%s' % pck[-39:-32], 16) >> 14) & 0x7f) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'vegetation': (
+            lambda pck: ((int('0x0%s' % pck[-39:-32], 16) >> 21) & 0x7f) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'terrain': (
+            lambda pck: int('0x0%s' % pck[-40:-39], 16) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'polygon_size': (
+            lambda pck: ((int('0x0%s' % pck[-41:-40], 16) & 0x3) + 2) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'disable_grass': (
+            lambda pck: ((int('0x0%s' % pck[-41:-40], 16) >> 2) & 0x1) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'shade_occlude': (
+            lambda pck: ((int('0x0%s' % pck[-32:-31], 16) >> 2) & 0x1) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'place_river': (
+            lambda pck: ((int('0x0%s' % pck[-32:-31], 16) >> 3) & 0x1) if isinstance(pck, str) else 0,
+            lambda val: 0,
+        ),
+        'deep_water': (
+            lambda pck: ((int('0x0%s' % pck[-16:-15], 16) >> 3) if isinstance(pck, str) else (pck >> 63)) & 0x1,
+            lambda val: 0,
+        ),
+    }
+
+
+# # TODO: need to expand this to multiple subclasses, conceal them as int values from module code
+# class WreckAggregateValue(dict):
+#     """
+#     A wrapper class for some combined values in Warband modules.
+#     This class is used to handle various pipe-connected parameter lists in Warband module files, like item properties
+#     and troop attribute/skill/proficiencies. Vanilla Warband compile combines those parameters into a single value with
+#     binary OR operation (pipe, "|"). WRECK uses a different approach, keeping the individual values as keys to an
+#     aggregate dictionary, making it easier to interact with those values, but also preventing various value overflow
+#     issues.
+#     """
+#
+#     def __or__(self, other):
+#         if not other: return self
+#         result = WreckAggregateValue(self)
+#         for key, value in other.iteritems():
+#             if type(value) == float: result[key] = max(result.get(key, 0.0), value)
+#             else: result[key] = result.get(key, 0) | value
+#         #result.update(other)
+#         return result
+#
+#     __ror__ = __radd__ = __add__ = __or__
 
 # |                                                                            |
 # |    COMPILER DATA WRAPPERS END                                              |
@@ -280,7 +380,7 @@ class WreckAggregateValue(dict):
 
 def parse_int(value):
     """Converts a single value to integer, or tuple/list of values to list of integers recursively."""
-    if isinstance(value, list) or isinstance(value, tuple): return map(parse_int, value) # Recursion
+    if isinstance(value, (tuple, list)): return map(parse_int, value) # Recursion
     if isinstance(value, WreckVariable) and value.is_static and (value.library is not None) and value.library['opmask']:
         return int(value) & 0xffffffff # Disable opmask if present, otherwise leave value as it is
     return int(value)
@@ -293,83 +393,83 @@ _detect_missing_var_name = re.compile("^[^']+'(\w+)'")
 _detect_file_encoding = re.compile('^#(.*coding\s*[:=]\s*([\w\d\-]+)(?:[^\w\d\-].*|$))', re.MULTILINE)
 
 
-def unparse_item_aggregate(value):
-    """WreckAggregateValue helper function.
-
-    Converts binary-packed item parameters into WRECK aggregate.
-    """
-    if isinstance(value, WreckAggregateValue): return value
-    return WreckAggregateValue({
-        'weight': get_weight(value),
-        'head': get_head_armor(value),
-        'body': get_body_armor(value),
-        'leg': get_leg_armor(value),
-        'diff': get_difficulty(value),
-        'hp': get_hit_points(value) & 0x3ff, # patch for Native compiler glitch
-        'speed': get_speed_rating(value),
-        'msspd': get_missile_speed(value),
-        'size': get_weapon_length(value),
-        'qty': get_max_ammo(value),
-        'swing': get_swing_damage(value),
-        'thrust': get_thrust_damage(value),
-        'abundance': get_abundance(value),
-    })
-
-def unparse_attr_aggregate(value):
-    """WreckAggregateValue helper function.
-
-    Converts binary-packed troop attributes into WRECK aggregate.
-    """
-    if isinstance(value, WreckAggregateValue): return value
-    return WreckAggregateValue({
-        'str': value & 0xFF,
-        'agi': (value >> 8) & 0xFF,
-        'int': (value >> 16) & 0xFF,
-        'cha': (value >> 24) & 0xFF,
-        'level': (value >> 32) & 0xFF
-    })
-
-def unparse_wp_aggregate(value):
-    """WreckAggregateValue helper function.
-
-    Converts binary-packed troop weapon proficiencies into WRECK aggregate.
-    """
-    if isinstance(value, WreckAggregateValue): return value
-    return WreckAggregateValue([(i, (value >> (10*i)) & 0x3FF) for i in xrange(WRECK.constants.num_weapon_proficiencies)])
-
-def unparse_terrain_aggregate(value):
-    """WreckAggregateValue helper function.
-
-    Converts scene terrain code into WRECK aggregate.
-    """
-    value = str(value).lower()
-    if value[0:2] == '0x':
-        value = value[2:]
-        return WreckAggregateValue({
-            'terrain_seed': int('0x0%s' % value[-4:], 16),
-            'river_seed': int('0x0%s' % value[-12:-8], 16),
-            'flora_seed': int('0x0%s' % value[-20:-16], 16),
-            'size_x': int('0x0%s' % value[-29:-24], 16) & 0x3ff,
-            'size_y': (int('0x0%s' % value[-29:-24], 16) >> 10) & 0x3ff,
-            'valley': (int('0x0%s' % value[-39:-32], 16) >> 0) & 0x7f,
-            'hill_height': (int('0x0%s' % value[-39:-32], 16) >> 7) & 0x7f,
-            'ruggedness': (int('0x0%s' % value[-39:-32], 16) >> 14) & 0x7f,
-            'vegetation': (int('0x0%s' % value[-39:-32], 16) >> 21) & 0x7f,
-            'terrain': int('0x0%s' % value[-40:-39], 16),
-            'polygon_size': (int('0x0%s' % value[-41:-40], 16) & 0x3) + 2,
-            'disable_grass': (int('0x0%s' % value[-41:-40], 16) >> 2) & 0x1,
-            'shade_occlude': (int('0x0%s' % value[-32:-31], 16) >> 2) & 0x1,
-            'place_river': (int('0x0%s' % value[-32:-31], 16) >> 3) & 0x1,
-            'deep_water': (int('0x0%s' % value[-16:-15], 16) >> 3) & 0x1,
-        })
-    else:
-        value = long(value)
-        return WreckAggregateValue({
-            'terrain_seed': value & 0xffffffff,
-            'river_seed': (value >> 32) & 0x7fffffff,
-            'flora_seed': (value >> 64) & 0xffffffff,
-            'deep_water': (value >> 63) & 0x1,
-        })
+# def unparse_item_aggregate(value):
+#     """WreckAggregateValue helper function.
+#
+#     Converts binary-packed item parameters into WRECK aggregate.
+#     """
+#     if isinstance(value, WreckAggregateValue): return value
+#     return WreckAggregateValue({
+#         'weight': get_weight(value),
+#         'head': get_head_armor(value),
+#         'body': get_body_armor(value),
+#         'leg': get_leg_armor(value),
+#         'diff': get_difficulty(value),
+#         'hp': get_hit_points(value) & 0x3ff, # patch for Native compiler glitch
+#         'speed': get_speed_rating(value),
+#         'msspd': get_missile_speed(value),
+#         'size': get_weapon_length(value),
+#         'qty': get_max_ammo(value),
+#         'swing': get_swing_damage(value),
+#         'thrust': get_thrust_damage(value),
+#         'abundance': get_abundance(value),
+#     })
+#
+# def unparse_attr_aggregate(value):
+#     """WreckAggregateValue helper function.
+#
+#     Converts binary-packed troop attributes into WRECK aggregate.
+#     """
+#     if isinstance(value, WreckAggregateValue): return value
+#     return WreckAggregateValue({
+#         'str': value & 0xFF,
+#         'agi': (value >> 8) & 0xFF,
+#         'int': (value >> 16) & 0xFF,
+#         'cha': (value >> 24) & 0xFF,
+#         'level': (value >> 32) & 0xFF
+#     })
+#
+# def unparse_wp_aggregate(value):
+#     """WreckAggregateValue helper function.
+#
+#     Converts binary-packed troop weapon proficiencies into WRECK aggregate.
+#     """
+#     if isinstance(value, WreckAggregateValue): return value
+#     return WreckAggregateValue([(i, (value >> (10*i)) & 0x3FF) for i in xrange(WRECK.constants.num_weapon_proficiencies)])
+#
+# def unparse_terrain_aggregate(value):
+#     """WreckAggregateValue helper function.
+#
+#     Converts scene terrain code into WRECK aggregate.
+#     """
+#     value = str(value).lower()
+#     if value[0:2] == '0x':
+#         value = value[2:]
+#         return WreckAggregateValue({
+#             'terrain_seed': int('0x0%s' % value[-4:], 16),
+#             'river_seed': int('0x0%s' % value[-12:-8], 16),
+#             'flora_seed': int('0x0%s' % value[-20:-16], 16),
+#             'size_x': int('0x0%s' % value[-29:-24], 16) & 0x3ff,
+#             'size_y': (int('0x0%s' % value[-29:-24], 16) >> 10) & 0x3ff,
+#             'valley': (int('0x0%s' % value[-39:-32], 16) >> 0) & 0x7f,
+#             'hill_height': (int('0x0%s' % value[-39:-32], 16) >> 7) & 0x7f,
+#             'ruggedness': (int('0x0%s' % value[-39:-32], 16) >> 14) & 0x7f,
+#             'vegetation': (int('0x0%s' % value[-39:-32], 16) >> 21) & 0x7f,
+#             'terrain': int('0x0%s' % value[-40:-39], 16),
+#             'polygon_size': (int('0x0%s' % value[-41:-40], 16) & 0x3) + 2,
+#             'disable_grass': (int('0x0%s' % value[-41:-40], 16) >> 2) & 0x1,
+#             'shade_occlude': (int('0x0%s' % value[-32:-31], 16) >> 2) & 0x1,
+#             'place_river': (int('0x0%s' % value[-32:-31], 16) >> 3) & 0x1,
+#             'deep_water': (int('0x0%s' % value[-16:-15], 16) >> 3) & 0x1,
+#         })
+#     else:
+#         value = long(value)
+#         return WreckAggregateValue({
+#             'terrain_seed': value & 0xffffffff,
+#             'river_seed': (value >> 32) & 0x7fffffff,
+#             'flora_seed': (value >> 64) & 0xffffffff,
+#             'deep_water': (value >> 63) & 0x1,
+#         })
 
 def _get_exception_details():
     global sys, extract_traceback
@@ -389,12 +489,13 @@ def _parse_reference_by_name(reference):
     return None
 
 def _import_sanitize_module_constants(data):
-    for key, value in data.iteritems():
-        if isinstance(value, str):
-            new_value = _parse_reference_by_name(value)
-            if new_value is not None:
-                data[key] = new_value
-                WRECK.log('replaced value: %s = %r (was %r)' % (key, new_value, value))
+    return # DISABLED
+    # for key, value in data.iteritems():
+    #     if isinstance(value, str):
+    #         new_value = _parse_reference_by_name(value)
+    #         if new_value is not None:
+    #             data[key] = new_value
+    #             WRECK.log('replaced value: %s = %r (was %r)' % (key, new_value, value))
 
 def _import_sanitize_references(data, *libraries):
     for library in libraries:
@@ -415,14 +516,15 @@ def _import_sanitize_overrides(data):
         if (key in WRECK._module_overrides) and (data[key] != WRECK._module_overrides[key]):
             WRECK.log('value conflict for %r: %s.%s = %r, WRECK.%s = %r: using WRECK value' % (key, current_module(), key, data[key], key, WRECK._module_overrides[key]))
             data[key] = WRECK._module_overrides[key]
-        elif (key == 'pos_belfry_begin') and not isinstance(data[key], WreckVariable):
+        elif (key == 'pos_belfry_begin') and not isinstance(data[key], maths.WreckFakeInt):
             WRECK._module_namespace[key] = data[key] = getattr(WRECK.libraries._posreg, 'pos%d' % int(data[key]))
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
-        elif (key == 'def_attrib') and not isinstance(data[key], WreckAggregateValue):
-            WRECK._module_namespace[key] = data[key] = unparse_attr_aggregate(data[key])
+        elif (key == 'def_attrib') and not isinstance(data[key], WreckAggregateAttr):
+            WRECK._module_namespace[key] = data[key] = WreckAggregateAttr(data[key])
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
-        elif (key == 'num_weapon_proficiencies'):
-            WRECK.constants.num_weapon_proficiencies = WRECK._module_namespace[key] = data[key]
+        elif key in WRECK.constants:
+            WRECK._module_namespace[key] = data[key]
+            setattr(WRECK.constants, key, data[key])
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
 
 def _import_sanitize_header_skills(data):
@@ -455,10 +557,8 @@ def _import_sanitize_header_operations(data):
         if (opname in data) and (opname not in data['depth_operations']):
             data['depth_operations'].append(data[opname])
             WRECK.log('added missing operation %s to depth_operations list', opname)
-    WRECK.constants.lhs_operations = data['lhs_operations']
-    WRECK.constants.global_lhs_operations = data['global_lhs_operations']
-    WRECK.constants.canfail_operations = data['canfail_operations']
-    WRECK.constants.depth_operations = data['depth_operations']
+    for key in ('neg', 'this_or_next', 'else_try', 'try_end', 'lhs_operations', 'global_lhs_operations', 'canfail_operations', 'depth_operations'):
+        WRECK.constants[key] = data[key]
     for opname, opcode in data.iteritems():
         if opname in ('neg', 'this_or_next'):
             setattr(WRECK.constants, opname, opcode)
@@ -727,25 +827,24 @@ def _parse_uid(rec, ofs, path = [], **argd):
 
 def _parse_int(rec, ofs, path = [], **argd):
     #print '_parse_int for %r in %r' % (path + [ofs], argd.get('uid'))
-    if isinstance(rec[ofs], int): return rec[ofs], 1
-    if isinstance(rec[ofs], long): return rec[ofs], 1
-    value = rec[ofs]
-    if not isinstance(value, WreckVariable):
-        if not isinstance(value, str):
-            _syntax_error(path + [ofs], argd, 'value {0!r} is not a valid integer or reference', value)
+    if isinstance(rec[ofs], maths.WreckFakeInt):
+        if not rec[ofs].is_static:
+            _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', rec[ofs])
             return 0, 1
-        value = _parse_reference_by_name(value)
+        return rec[ofs], 1
+    if isinstance(rec[ofs], (int, long)): return rec[ofs], 1
+    if isinstance(rec[ofs], str):
+        value = _parse_reference_by_name(rec[ofs])
         if value is None:
             _syntax_error(path + [ofs], argd, 'cannot convert {0!r} to integer', rec[ofs])
             return 0, 1
-    if not value.is_static:
-        _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', value)
-        return 0, 1
-    return value, 1
+        return value, 1
+    _syntax_error(path + [ofs], argd, 'value {0!r} is not a valid integer or reference', rec[ofs])
+    return 0, 1
 
 def _parse_float(rec, ofs, path = [], **argd):
     #print '_parse_float for %r in %r' % (path + [ofs], argd.get('uid'))
-    if isinstance(rec[ofs], WreckVariable):
+    if isinstance(rec[ofs], maths.WreckFakeInt):
         if not rec[ofs].is_static:
             _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', rec[ofs])
             return 0.0, 1
@@ -774,7 +873,8 @@ def _parse_ref(lib_name):
         if not library:
             _syntax_error(path + [ofs], argd, 'illegal library {0!r} in _parse_ref definition', lib_name)
             return 0, 1
-        if isinstance(rec[ofs], WreckVariable): return rec[ofs], 1
+        # TODO: handle situation when reference is from a different library than expected: add mistake message
+        if isinstance(rec[ofs], maths.WreckFakeInt): return rec[ofs], 1
         if isinstance(rec[ofs], str):
             prefix = library['prefix']
             if prefix and rec[ofs].startswith(prefix):
@@ -891,15 +991,15 @@ def _parse_expect(value):
         return value, 1
     return _expect_parser
 
-def _parse_aggregate(unpack_function):
+def _parse_aggregate(aggregate_class):
     def _aggregate_parser(rec, ofs, path = [], **argd):
         #print '_parse_aggregate for %r in %r' % (path + [ofs], argd.get('uid'))
-        if isinstance(rec[ofs], WreckAggregateValue): return rec[ofs], 1
+        if isinstance(rec[ofs], aggregate_class): return rec[ofs], 1
         try:
-            return unpack_function(rec[ofs]), 1
+            return aggregate_class(rec[ofs]), 1
         except Exception:
-            _syntax_error(path + [ofs], argd, 'failed to unpack value {0!r} as aggregate', rec[ofs])
-            return unpack_function(0), 1
+            _syntax_error(path + [ofs], argd, 'failed to unpack value {0!r} as %s', rec[ofs], aggregate_class.__name__)
+            return aggregate_class(0), 1
     return _aggregate_parser
 
 def _parse_file(*lookups):
@@ -1203,7 +1303,7 @@ class WreckOperation(object):
         return self.opcount, code
 
 
-class WreckVariable(object):
+class WreckVariable(maths.WreckFakeInt):
     """Base class for Warband module variables and references.
 
     This class handles module variables and references, as well as any mathematical expressions that use them.
@@ -1224,32 +1324,29 @@ class WreckVariable(object):
     """
 
     references = None     # Contains set of names for modules that reference this variable in the code
-    is_expression = False # Signifies a mathematical expression instead of a simple reference
-    is_static = True      # Signifies that the variable contains a static value and can be computed at compile-time
     is_required = True    # If true, this variable will generate error if it's value is not defined
-    is_forced = False     # Set to True if this variable or expression was forcefully evaluated
 
     module = None
     name = None
-    value = None
-    operation = None
 
     def __init__(self, library = None, name = None, value = None, operation = None, static = True, required = True):
+        if self.expression_class is None: self.expression_class = WreckVariable
         self.library = library
         self.name = name
         self.references = set()
         self.is_required = required
-        if operation:
-            if not isinstance(operation[0], WreckOperation): raise SyntaxError('illegal operation %r' % operation[0])
-            self.operation = operation
-            self.is_expression = True
-            self.is_required = False
-            if static:
-                for operand in operation[1:]:
-                    if isinstance(operand, WreckVariable) and not operand.is_static: static = False
-        else:
-            self.value = value
-        self.is_static = static
+        super(WreckVariable, self).__init__(value, operation, static)
+        # if operation:
+        #     if not isinstance(operation[0], WreckOperation): raise SyntaxError('illegal operation %r' % operation[0])
+        #     self.operation = operation
+        #     self.is_expression = True
+        #     self.is_required = False
+        #     if static:
+        #         for operand in operation[1:]:
+        #             if isinstance(operand, WreckVariable) and not operand.is_static: static = False
+        # else:
+        #     self.value = value
+        # self.is_static = static
 
     def add_reference(self, reference = None):
         if self.is_expression: return
@@ -1260,71 +1357,29 @@ class WreckVariable(object):
     def list_references(self):
         return ', '.join(sorted(self.references))
 
-    def __add__(self, other):    return WreckVariable(operation = (_add, self, other))
-    def __sub__(self, other):    return WreckVariable(operation = (_sub, self, other))
-    def __mul__(self, other):    return WreckVariable(operation = (_mul, self, other))
-    def __div__(self, other):    return WreckVariable(operation = (_div, self, other))
-    def __mod__(self, other):    return WreckVariable(operation = (_mod, self, other))
-    def __pow__(self, other):    return WreckVariable(operation = (_pow, self, other))
-    def __lshift__(self, other): return WreckVariable(operation = (_shl, self, other))
-    def __rshift__(self, other): return WreckVariable(operation = (_shr, self, other))
-    def __and__(self, other):    return WreckVariable(operation = (_and, self, other))
-    def __or__(self, other):     return WreckVariable(operation = (_or, self, other))
-
-    def __radd__(self, other):    return WreckVariable(operation = (_add, other, self))
-    def __rsub__(self, other):    return WreckVariable(operation = (_sub, other, self))
-    def __rmul__(self, other):    return WreckVariable(operation = (_mul, other, self))
-    def __rdiv__(self, other):    return WreckVariable(operation = (_div, other, self))
-    def __rmod__(self, other):    return WreckVariable(operation = (_mod, other, self))
-    def __rpow__(self, other):    return WreckVariable(operation = (_pow, other, self))
-    def __rlshift__(self, other): return WreckVariable(operation = (_shl, other, self))
-    def __rrshift__(self, other): return WreckVariable(operation = (_shr, other, self))
-    def __rand__(self, other):    return WreckVariable(operation = (_and, other, self))
-    def __ror__(self, other):     return WreckVariable(operation = (_or, other, self))
-
-    def __neg__(self): return WreckVariable(operation = (_neg, self))
-    def __pos__(self): return self
-    def __abs__(self): return WreckVariable(operation = (_abs, self))
-
     def formatted_name(self):
         if self.is_expression: return '<expr>'
         if self.library is None: return '?.%s' % self.name
         return '%s.%s' % (self.library['basename'], self.name)
 
-    def __int__(self):
-        try:
-            if self.is_expression:
-                if not isinstance(self.operation[0], WreckOperation):
-                    raise WreckException('illegal operation %r' % (self.operation[0]))
-                if not self.is_static:
-                    WRECK.issues.failed_evals.append('cannot calculate dynamic expression {0!r} at runtime'.format(self))
-                    self.is_forced = True
-                    return 0
-                try:
-                    return self.operation[0](*map(int, self.operation[1:]))
-                except ArithmeticError as e:
-                    self.is_forced = True
-                    for operand in self.operation[1:]:
-                        if isinstance(operand, WreckVariable) and operand.is_forced:
-                            return 0
-                    WRECK.issues.failed_evals.append('failed to calculate expression {0!r}: {1}'.format(self, e.message))
-                    return 0
-            else:
-                if self.value is not None: return self.value
-                name = 'reference' if self.is_static else 'variable'
-                WRECK.issues.undefined_refs[self.formatted_name()] = self
-                self.is_forced = True
-                return 0
-        except WreckException as e:
-            raise WreckException('failed to calculate expression %r' % self, *e.args)
-        except Exception as e:
-            raise WreckException('failed to calculate expression %r' % self, formatted_exception())
+    def resolve_illegal_operation(self, op):
+        raise WreckException('illegal operation {0!r}'.format(op))
 
-    __long__ = lambda self: self.__int__() # lambda works as wrapper, so we can safely replace __int__ in child classes
-    __index__ = lambda self: self.__int__()
-    __float__ = lambda self: float(self.__int__())
-    __str__ = lambda self: str(self.__int__())
+    def resolve_dynamic_eval(self):
+        WRECK.issues.failed_evals.append('cannot calculate dynamic expression {0!r} at runtime'.format(self))
+        self.is_forced = True
+        return 0
 
+    def resolve_failed_eval(self, exc):
+        WRECK.issues.failed_evals.append('failed to calculate expression {0!r}: {1}'.format(self, exc.message))
+        return 0
+
+    def resolve_undefined_eval(self):
+        WRECK.issues.undefined_refs[self.formatted_name()] = self
+        self.is_forced = True
+        return 0
+
+    # TODO: seems there are bugs when representing expressions: they become too heavy instead of gracefully collapsing
     def __repr__(self):
         if self.is_expression:
             if isinstance(self.operation[0], WreckOperation):
@@ -1335,7 +1390,7 @@ class WreckVariable(object):
                     clear_ops = []
                     for index in (1,2):
                         op = self.operation[index]
-                        if isinstance(op, WreckVariable) and op.is_expression:
+                        if (type(op, True) == WreckVariable) and op.is_expression:
                             if op.operation[0].unary:
                                 clear_ops.append(repr_ops[index-1])
                             elif op.operation[0] == self.operation[0]:
@@ -1393,6 +1448,8 @@ class WreckVariable(object):
         except Exception as e:
             raise WreckException('failed to generate dynamic code for expression %r' % self, formatted_exception())
 
+WreckVariable.expression_class = WreckVariable # (all child classes will be using this)
+
 
 # TODO: decide what to do with WreckOpcodes
 class WreckOpcode(WreckVariable):
@@ -1412,13 +1469,13 @@ class WreckOpcode(WreckVariable):
         self.neg = bool(value & WRECK.constants.neg)
         self.this_or_next = bool(value & WRECK.constants.this_or_next)
         self.base_opcode = value & (0xffffffff ^ (WRECK.constants.neg | WRECK.constants.this_or_next))
-        if value in WRECK.constants.lhs_ops:
+        if value in WRECK.constants.lhs_operations:
             self.defines = self.assigns = True
-        if value in WRECK.constants.global_lhs_ops:
+        if value in WRECK.constants.global_lhs_operations:
             self.assigns = True
-        if value in WRECK.constants.canfail_ops:
+        if value in WRECK.constants.canfail_operations:
             self.can_fail = True
-        if value in WRECK.constants.depth_ops:
+        if value in WRECK.constants.depth_operations:
             self.depth_change = 1
         elif value == WRECK.constants.try_end:
             self.depth_change = -1
@@ -1433,13 +1490,14 @@ class WreckOpcode(WreckVariable):
             #    WRECK.issues.mistakes.append()
             return WreckOpcode(name = 'neg|' + self.name, value = self.value | other)
         if other == WRECK.constants.this_or_next:
-            return WreckOpcode(name = 'this_or_next|' + self.name, value = self.value | this_or_next)
+            return WreckOpcode(name = 'this_or_next|' + self.name, value = self.value | other)
 
     __ror__ = __or__
 
     __repr__ = lambda self: self.name
 
 
+# TODO: inherit WreckProperty from WreckFakeInt instead. Will need exception resolvers.
 class WreckProperty(WreckVariable):
     """A subclass of WreckVariable, providing compile-time hooks to actual values in module files.
 
@@ -1453,9 +1511,9 @@ class WreckProperty(WreckVariable):
     entity = None
     #normalizer = None
 
-    def __init__(self, module, entity, prop_name, *retrieval):
+    def __init__(self, library, entity, prop_name, *retrieval):
         if not entity.is_static: raise WreckException('property {0!r} cannot be evaluated: reference {1!r} not static'.format(self, entity))
-        super(WreckProperty, self).__init__(module)
+        super(WreckProperty, self).__init__(library)
         self.name = prop_name
         self.is_expression = True
         self.entity = entity
@@ -1471,7 +1529,7 @@ class WreckProperty(WreckVariable):
 
     __repr__ = formatted_name
 
-    def __int__(self):
+    def _resolve_value(self):
         try:
             if not self.library['sanitized']:
                 raise WreckException('cannot evaluate property %r: library %r has no sanitized data source' % (self, self.library))
@@ -1498,47 +1556,47 @@ class WreckItemReference(WreckVariable):
     """
 
     @property
-    def flags(self):              return WreckProperty(WRECK.itm, self, 'flags', (3, None, 0))
+    def flags(self):              return WreckProperty(WRECK.libraries.itm, self, 'flags', (3, None, 0))
     @property
-    def capabilities(self):       return WreckProperty(WRECK.itm, self, 'capabilities', (4, None, 0))
+    def capabilities(self):       return WreckProperty(WRECK.libraries.itm, self, 'capabilities', (4, None, 0))
     @property
-    def price(self):              return WreckProperty(WRECK.itm, self, 'price', (5, None, 0))
+    def price(self):              return WreckProperty(WRECK.libraries.itm, self, 'price', (5, None, 0))
     @property
-    def weight(self):             return WreckProperty(WRECK.itm, self, 'weight', (6, unparse_item_aggregate, {}), ('weight', None, 0.0))
+    def weight(self):             return WreckProperty(WRECK.libraries.itm, self, 'weight', (6, WreckAggregateItem, {}), ('weight', None, 0.0))
     @property
-    def head_armor(self):         return WreckProperty(WRECK.itm, self, 'head_armor', (6, unparse_item_aggregate, {}), ('head', None, 0))
+    def head_armor(self):         return WreckProperty(WRECK.libraries.itm, self, 'head_armor', (6, WreckAggregateItem, {}), ('head', None, 0))
     @property
-    def body_armor(self):         return WreckProperty(WRECK.itm, self, 'body_armor', (6, unparse_item_aggregate, {}), ('body', None, 0))
+    def body_armor(self):         return WreckProperty(WRECK.libraries.itm, self, 'body_armor', (6, WreckAggregateItem, {}), ('body', None, 0))
     @property
-    def leg_armor(self):          return WreckProperty(WRECK.itm, self, 'leg_armor', (6, unparse_item_aggregate, {}), ('leg', None, 0))
+    def leg_armor(self):          return WreckProperty(WRECK.libraries.itm, self, 'leg_armor', (6, WreckAggregateItem, {}), ('leg', None, 0))
     @property
-    def difficulty(self):         return WreckProperty(WRECK.itm, self, 'difficulty', (6, unparse_item_aggregate, {}), ('diff', None, 0))
+    def difficulty(self):         return WreckProperty(WRECK.libraries.itm, self, 'difficulty', (6, WreckAggregateItem, {}), ('diff', None, 0))
     @property
-    def hp(self):                 return WreckProperty(WRECK.itm, self, 'hp', (6, unparse_item_aggregate, {}), ('hp', None, 0))
+    def hp(self):                 return WreckProperty(WRECK.libraries.itm, self, 'hp', (6, WreckAggregateItem, {}), ('hp', None, 0))
     @property
-    def speed(self):              return WreckProperty(WRECK.itm, self, 'speed', (6, unparse_item_aggregate, {}), ('speed', None, 0))
+    def speed(self):              return WreckProperty(WRECK.libraries.itm, self, 'speed', (6, WreckAggregateItem, {}), ('speed', None, 0))
     @property
-    def missile_speed(self):      return WreckProperty(WRECK.itm, self, 'missile_speed', (6, unparse_item_aggregate, {}), ('msspd', None, 0))
+    def missile_speed(self):      return WreckProperty(WRECK.libraries.itm, self, 'missile_speed', (6, WreckAggregateItem, {}), ('msspd', None, 0))
     @property
-    def size(self):               return WreckProperty(WRECK.itm, self, 'size', (6, unparse_item_aggregate, {}), ('size', None, 0))
+    def size(self):               return WreckProperty(WRECK.libraries.itm, self, 'size', (6, WreckAggregateItem, {}), ('size', None, 0))
     @property
-    def max_amount(self):         return WreckProperty(WRECK.itm, self, 'max_amount', (6, unparse_item_aggregate, {}), ('qty', None, 0))
+    def max_amount(self):         return WreckProperty(WRECK.libraries.itm, self, 'max_amount', (6, WreckAggregateItem, {}), ('qty', None, 0))
     @property
-    def swing(self):              return WreckProperty(WRECK.itm, self, 'swing', (6, unparse_item_aggregate, {}), ('swing', None, 0))
+    def swing(self):              return WreckProperty(WRECK.libraries.itm, self, 'swing', (6, WreckAggregateItem, {}), ('swing', None, 0))
     @property
-    def swing_damage(self):       return WreckProperty(WRECK.itm, self, 'swing_damage', (6, unparse_item_aggregate, {}), ('swing', lambda x: x & ibf_armor_mask, 0))
+    def swing_damage(self):       return WreckProperty(WRECK.libraries.itm, self, 'swing_damage', (6, WreckAggregateItem, {}), ('swing', lambda x: x & ibf_armor_mask, 0))
     @property
-    def swing_damage_type(self):  return WreckProperty(WRECK.itm, self, 'swing_damage_type', (6, unparse_item_aggregate, {}), ('swing', lambda x: x >> iwf_damage_type_bits, 0))
+    def swing_damage_type(self):  return WreckProperty(WRECK.libraries.itm, self, 'swing_damage_type', (6, WreckAggregateItem, {}), ('swing', lambda x: x >> iwf_damage_type_bits, 0))
     @property
-    def thrust(self):             return WreckProperty(WRECK.itm, self, 'thrust', (6, unparse_item_aggregate, {}), ('thrust', None, 0))
+    def thrust(self):             return WreckProperty(WRECK.libraries.itm, self, 'thrust', (6, WreckAggregateItem, {}), ('thrust', None, 0))
     @property
-    def thrust_damage(self):      return WreckProperty(WRECK.itm, self, 'thrust_damage', (6, unparse_item_aggregate, {}), ('thrust', lambda x: x & ibf_armor_mask, 0))
+    def thrust_damage(self):      return WreckProperty(WRECK.libraries.itm, self, 'thrust_damage', (6, WreckAggregateItem, {}), ('thrust', lambda x: x & ibf_armor_mask, 0))
     @property
-    def thrust_damage_type(self): return WreckProperty(WRECK.itm, self, 'thrust_damage_type', (6, unparse_item_aggregate, {}), ('thrust', lambda x: x >> iwf_damage_type_bits, 0))
+    def thrust_damage_type(self): return WreckProperty(WRECK.libraries.itm, self, 'thrust_damage_type', (6, WreckAggregateItem, {}), ('thrust', lambda x: x >> iwf_damage_type_bits, 0))
     @property
-    def abundance(self):          return WreckProperty(WRECK.itm, self, 'abundance', (6, unparse_item_aggregate, {}), ('abundance', None, 0))
+    def abundance(self):          return WreckProperty(WRECK.libraries.itm, self, 'abundance', (6, WreckAggregateItem, {}), ('abundance', None, 0))
     @property
-    def modifiers(self):          return WreckProperty(WRECK.itm, self, 'modifiers', (7, None, 0))
+    def modifiers(self):          return WreckProperty(WRECK.libraries.itm, self, 'modifiers', (7, None, 0))
 
     food_quality = head_armor
     accuracy = leg_armor
@@ -1555,49 +1613,49 @@ class WreckSceneReference(WreckVariable):
     """
 
     @property
-    def flags(self): return WreckProperty(WRECK.scn, self, 'flags', (1, None, 0))
+    def flags(self): return WreckProperty(WRECK.libraries.scn, self, 'flags', (1, None, 0))
     @property
-    def min_x(self): return WreckProperty(WRECK.scn, self, 'min_x', (4, None, 0), (0, int, 0))
+    def min_x(self): return WreckProperty(WRECK.libraries.scn, self, 'min_x', (4, None, 0), (0, int, 0))
     @property
-    def min_y(self): return WreckProperty(WRECK.scn, self, 'min_y', (4, None, 0), (1, int, 0))
+    def min_y(self): return WreckProperty(WRECK.libraries.scn, self, 'min_y', (4, None, 0), (1, int, 0))
     @property
-    def max_x(self): return WreckProperty(WRECK.scn, self, 'max_x', (5, None, 0), (0, int, 0))
+    def max_x(self): return WreckProperty(WRECK.libraries.scn, self, 'max_x', (5, None, 0), (0, int, 0))
     @property
-    def max_y(self): return WreckProperty(WRECK.scn, self, 'max_y', (5, None, 0), (1, int, 0))
+    def max_y(self): return WreckProperty(WRECK.libraries.scn, self, 'max_y', (5, None, 0), (1, int, 0))
     @property
-    def water_level(self): return WreckProperty(WRECK.scn, self, 'water_level', (6, lambda x: int(x + 0.5), 0))
+    def water_level(self): return WreckProperty(WRECK.libraries.scn, self, 'water_level', (6, lambda x: int(x + 0.5), 0))
     @property
-    def water_level_cm(self): return WreckProperty(WRECK.scn, self, 'water_level_cm', (6, lambda x: int(x * 100 + 0.5), 0))
+    def water_level_cm(self): return WreckProperty(WRECK.libraries.scn, self, 'water_level_cm', (6, lambda x: int(x * 100 + 0.5), 0))
     @property
-    def terrain_seed(self): return WreckProperty(WRECK.scn, self, 'terrain_seed', (7, unparse_terrain_aggregate, None), ('terrain_seed', None, 0))
+    def terrain_seed(self): return WreckProperty(WRECK.libraries.scn, self, 'terrain_seed', (7, WreckAggregateTerrain, None), ('terrain_seed', None, 0))
     @property
-    def river_seed(self): return WreckProperty(WRECK.scn, self, 'river_seed', (7, unparse_terrain_aggregate, None), ('river_seed', None, 0))
+    def river_seed(self): return WreckProperty(WRECK.libraries.scn, self, 'river_seed', (7, WreckAggregateTerrain, None), ('river_seed', None, 0))
     @property
-    def flora_seed(self): return WreckProperty(WRECK.scn, self, 'flora_seed', (7, unparse_terrain_aggregate, None), ('flora_seed', None, 0))
+    def flora_seed(self): return WreckProperty(WRECK.libraries.scn, self, 'flora_seed', (7, WreckAggregateTerrain, None), ('flora_seed', None, 0))
     @property
-    def size_x(self): return WreckProperty(WRECK.scn, self, 'size_x', (7, unparse_terrain_aggregate, None), ('size_x', None, 0))
+    def size_x(self): return WreckProperty(WRECK.libraries.scn, self, 'size_x', (7, WreckAggregateTerrain, None), ('size_x', None, 0))
     @property
-    def size_y(self): return WreckProperty(WRECK.scn, self, 'size_y', (7, unparse_terrain_aggregate, None), ('size_y', None, 0))
+    def size_y(self): return WreckProperty(WRECK.libraries.scn, self, 'size_y', (7, WreckAggregateTerrain, None), ('size_y', None, 0))
     @property
-    def valley(self): return WreckProperty(WRECK.scn, self, 'valley', (7, unparse_terrain_aggregate, None), ('valley', None, 0))
+    def valley(self): return WreckProperty(WRECK.libraries.scn, self, 'valley', (7, WreckAggregateTerrain, None), ('valley', None, 0))
     @property
-    def hill_height(self): return WreckProperty(WRECK.scn, self, 'hill_height', (7, unparse_terrain_aggregate, None), ('hill_height', None, 0))
+    def hill_height(self): return WreckProperty(WRECK.libraries.scn, self, 'hill_height', (7, WreckAggregateTerrain, None), ('hill_height', None, 0))
     @property
-    def ruggedness(self): return WreckProperty(WRECK.scn, self, 'ruggedness', (7, unparse_terrain_aggregate, None), ('ruggedness', None, 0))
+    def ruggedness(self): return WreckProperty(WRECK.libraries.scn, self, 'ruggedness', (7, WreckAggregateTerrain, None), ('ruggedness', None, 0))
     @property
-    def vegetation(self): return WreckProperty(WRECK.scn, self, 'vegetation', (7, unparse_terrain_aggregate, None), ('vegetation', None, 0))
+    def vegetation(self): return WreckProperty(WRECK.libraries.scn, self, 'vegetation', (7, WreckAggregateTerrain, None), ('vegetation', None, 0))
     @property
-    def terrain(self): return WreckProperty(WRECK.scn, self, 'terrain', (7, unparse_terrain_aggregate, None), ('terrain', None, 0))
+    def terrain(self): return WreckProperty(WRECK.libraries.scn, self, 'terrain', (7, WreckAggregateTerrain, None), ('terrain', None, 0))
     @property
-    def polygon_size(self): return WreckProperty(WRECK.scn, self, 'polygon_size', (7, unparse_terrain_aggregate, None), ('polygon_size', None, 2))
+    def polygon_size(self): return WreckProperty(WRECK.libraries.scn, self, 'polygon_size', (7, WreckAggregateTerrain, None), ('polygon_size', None, 2))
     @property
-    def disable_grass(self): return WreckProperty(WRECK.scn, self, 'disable_grass', (7, unparse_terrain_aggregate, None), ('disable_grass', None, 0))
+    def disable_grass(self): return WreckProperty(WRECK.libraries.scn, self, 'disable_grass', (7, WreckAggregateTerrain, None), ('disable_grass', None, 0))
     @property
-    def shade_occlude(self): return WreckProperty(WRECK.scn, self, 'shade_occlude', (7, unparse_terrain_aggregate, None), ('shade_occlude', None, 0))
+    def shade_occlude(self): return WreckProperty(WRECK.libraries.scn, self, 'shade_occlude', (7, WreckAggregateTerrain, None), ('shade_occlude', None, 0))
     @property
-    def place_river(self): return WreckProperty(WRECK.scn, self, 'place_river', (7, unparse_terrain_aggregate, None), ('place_river', None, 0))
+    def place_river(self): return WreckProperty(WRECK.libraries.scn, self, 'place_river', (7, WreckAggregateTerrain, None), ('place_river', None, 0))
     @property
-    def deep_water(self): return WreckProperty(WRECK.scn, self, 'deep_water', (7, unparse_terrain_aggregate, None), ('deep_water', None, 0))
+    def deep_water(self): return WreckProperty(WRECK.libraries.scn, self, 'deep_water', (7, WreckAggregateTerrain, None), ('deep_water', None, 0))
 
 
 class WreckFactionReference(WreckVariable):
@@ -1607,11 +1665,11 @@ class WreckFactionReference(WreckVariable):
     """
 
     @property
-    def flags(self): return WreckProperty(WRECK.fac, self, 'flags', (2, None, 0))
+    def flags(self): return WreckProperty(WRECK.libraries.fac, self, 'flags', (2, None, 0))
     @property
-    def coherence(self): return WreckProperty(WRECK.fac, self, 'coherence', (3, lambda x: int(x * 100 + 0.5), 0))
+    def coherence(self): return WreckProperty(WRECK.libraries.fac, self, 'coherence', (3, lambda x: int(x * 100 + 0.5), 0))
     @property
-    def default_color(self): return WreckProperty(WRECK.fac, self, 'default_color', (6, None, 0xAAAAAA))
+    def default_color(self): return WreckProperty(WRECK.libraries.fac, self, 'default_color', (6, None, 0xAAAAAA))
 
 
 class WreckItemModifierReference(WreckVariable):
@@ -1621,9 +1679,9 @@ class WreckItemModifierReference(WreckVariable):
     """
 
     @property
-    def price_coeff(self): return WreckProperty(WRECK.imod, self, 'price_coeff', (2, lambda x: int(x * 100 + 0.5), 0))
+    def price_coeff(self): return WreckProperty(WRECK.libraries.imod, self, 'price_coeff', (2, lambda x: int(x * 100 + 0.5), 0))
     @property
-    def rarity_coeff(self): return WreckProperty(WRECK.imod, self, 'rarity_coeff', (3, lambda x: int(x * 100 + 0.5), 0))
+    def rarity_coeff(self): return WreckProperty(WRECK.libraries.imod, self, 'rarity_coeff', (3, lambda x: int(x * 100 + 0.5), 0))
 
 
 class WreckPartyReference(WreckVariable):
@@ -1633,35 +1691,35 @@ class WreckPartyReference(WreckVariable):
     """
 
     @property
-    def flags_field(self): return WreckProperty(WRECK.p, self, 'flags_field', (2, None, 0)) # Use this if you need icon+flags combined value
+    def flags_field(self): return WreckProperty(WRECK.libraries.p, self, 'flags_field', (2, None, 0)) # Use this if you need icon+flags combined value
     @property
-    def icon(self): return WreckProperty(WRECK.p, self, 'icon', (2, lambda x: x & 0xff, 0))
+    def icon(self): return WreckProperty(WRECK.libraries.p, self, 'icon', (2, lambda x: x & 0xff, 0))
     @property
-    def flags(self): return WreckProperty(WRECK.p, self, 'flags', (2, lambda x: (x >> 8) << 8, 0))
+    def flags(self): return WreckProperty(WRECK.libraries.p, self, 'flags', (2, lambda x: (x >> 8) << 8, 0))
     @property
-    def default_menu(self): return WreckProperty(WRECK.p, self, 'menu', (3, None, 0))
+    def default_menu(self): return WreckProperty(WRECK.libraries.p, self, 'menu', (3, None, 0))
     @property
-    def template(self): return WreckProperty(WRECK.p, self, 'template', (4, None, 0))
+    def template(self): return WreckProperty(WRECK.libraries.p, self, 'template', (4, None, 0))
     @property
-    def faction(self): return WreckProperty(WRECK.p, self, 'faction', (5, None, 0))
+    def faction(self): return WreckProperty(WRECK.libraries.p, self, 'faction', (5, None, 0))
     @property
-    def personality(self): return WreckProperty(WRECK.p, self, 'personality', (6, None, 0))
+    def personality(self): return WreckProperty(WRECK.libraries.p, self, 'personality', (6, None, 0))
     @property
-    def ai(self): return WreckProperty(WRECK.p, self, 'ai', (7, None, ai_bhvr_hold))
+    def ai(self): return WreckProperty(WRECK.libraries.p, self, 'ai', (7, None, WRECK.constants.ai_bhvr_hold))
     @property
-    def ai_target(self): return WreckProperty(WRECK.p, self, 'ai_target', (8, None, 0))
+    def ai_target(self): return WreckProperty(WRECK.libraries.p, self, 'ai_target', (8, None, 0))
     @property
-    def start_x(self): return WreckProperty(WRECK.p, self, 'start_x', (9, None, None), (0, lambda x: int(x + 0.5), 0))
+    def start_x(self): return WreckProperty(WRECK.libraries.p, self, 'start_x', (9, None, None), (0, lambda x: int(x + 0.5), 0))
     @property
-    def start_x_cm(self): return WreckProperty(WRECK.p, self, 'start_x_cm', (9, None, None), (0, lambda x: int(x * 100 + 0.5), 0))
+    def start_x_cm(self): return WreckProperty(WRECK.libraries.p, self, 'start_x_cm', (9, None, None), (0, lambda x: int(x * 100 + 0.5), 0))
     @property
-    def start_y(self): return WreckProperty(WRECK.p, self, 'start_y', (9, None, None), (0, lambda x: int(x + 0.5), 0))
+    def start_y(self): return WreckProperty(WRECK.libraries.p, self, 'start_y', (9, None, None), (0, lambda x: int(x + 0.5), 0))
     @property
-    def start_y_cm(self): return WreckProperty(WRECK.p, self, 'start_y_cm', (9, None, None), (0, lambda x: int(x * 100 + 0.5), 0))
+    def start_y_cm(self): return WreckProperty(WRECK.libraries.p, self, 'start_y_cm', (9, None, None), (0, lambda x: int(x * 100 + 0.5), 0))
     @property
-    def angle(self): return WreckProperty(WRECK.p, self, 'angle', (11, lambda x: int(x + 0.5), 0))
+    def angle(self): return WreckProperty(WRECK.libraries.p, self, 'angle', (11, lambda x: int(x + 0.5), 0))
     @property
-    def angle_100(self): return WreckProperty(WRECK.p, self, 'angle_100', (11, lambda x: int(x * 100 + 0.5), 0))
+    def angle_100(self): return WreckProperty(WRECK.libraries.p, self, 'angle_100', (11, lambda x: int(x * 100 + 0.5), 0))
 
 
 class WreckPartyTemplateReference(WreckVariable):
@@ -1671,17 +1729,17 @@ class WreckPartyTemplateReference(WreckVariable):
     """
 
     @property
-    def flags_field(self): return WreckProperty(WRECK.pt, self, 'flags_field', (2, None, 0)) # Use this if you need icon+flags combined value
+    def flags_field(self): return WreckProperty(WRECK.libraries.pt, self, 'flags_field', (2, None, 0)) # Use this if you need icon+flags combined value
     @property
-    def icon(self): return WreckProperty(WRECK.pt, self, 'icon', (2, lambda x: x & 0xff, 0))
+    def icon(self): return WreckProperty(WRECK.libraries.pt, self, 'icon', (2, lambda x: x & 0xff, 0))
     @property
-    def flags(self): return WreckProperty(WRECK.pt, self, 'flags', (2, lambda x: (x >> 8) << 8, 0))
+    def flags(self): return WreckProperty(WRECK.libraries.pt, self, 'flags', (2, lambda x: (x >> 8) << 8, 0))
     @property
-    def default_menu(self): return WreckProperty(WRECK.pt, self, 'default_menu', (3, None, 0))
+    def default_menu(self): return WreckProperty(WRECK.libraries.pt, self, 'default_menu', (3, None, 0))
     @property
-    def faction(self): return WreckProperty(WRECK.pt, self, 'faction', (4, None, 0))
+    def faction(self): return WreckProperty(WRECK.libraries.pt, self, 'faction', (4, None, 0))
     @property
-    def personality(self): return WreckProperty(WRECK.pt, self, 'personality', (5, None, 0))
+    def personality(self): return WreckProperty(WRECK.libraries.pt, self, 'personality', (5, None, 0))
 
 
 class WreckTroopReference(WreckVariable):
@@ -1691,45 +1749,45 @@ class WreckTroopReference(WreckVariable):
     """
 
     @property
-    def flags(self): return WreckProperty(WRECK.trp, self, 'flags', (3, None, 0))
+    def flags(self): return WreckProperty(WRECK.libraries.trp, self, 'flags', (3, None, 0))
     @property
-    def scene(self): return WreckProperty(WRECK.trp, self, 'scene', (4, None, 0))
+    def scene(self): return WreckProperty(WRECK.libraries.trp, self, 'scene', (4, None, 0))
     @property
-    def faction(self): return WreckProperty(WRECK.trp, self, 'faction', (6, None, 0))
+    def faction(self): return WreckProperty(WRECK.libraries.trp, self, 'faction', (6, None, 0))
     @property
-    def level(self): return WreckProperty(WRECK.trp, self, 'level', (8, unparse_attr_aggregate, 0), ('level', None, 0))
+    def level(self): return WreckProperty(WRECK.libraries.trp, self, 'level', (8, WreckAggregateAttr, 0), ('level', None, 0))
     @property
-    def strength(self): return WreckProperty(WRECK.trp, self, 'strength', (8, unparse_attr_aggregate, 0), ('str', None, 0))
+    def strength(self): return WreckProperty(WRECK.libraries.trp, self, 'strength', (8, WreckAggregateAttr, 0), ('str', None, 0))
     @property
-    def agility(self): return WreckProperty(WRECK.trp, self, 'agility', (8, unparse_attr_aggregate, 0), ('agi', None, 0))
+    def agility(self): return WreckProperty(WRECK.libraries.trp, self, 'agility', (8, WreckAggregateAttr, 0), ('agi', None, 0))
     @property
-    def intelligence(self): return WreckProperty(WRECK.trp, self, 'intelligence', (8, unparse_attr_aggregate, 0), ('int', None, 0))
+    def intelligence(self): return WreckProperty(WRECK.libraries.trp, self, 'intelligence', (8, WreckAggregateAttr, 0), ('int', None, 0))
     @property
-    def charisma(self): return WreckProperty(WRECK.trp, self, 'charisma', (8, unparse_attr_aggregate, 0), ('cha', None, 0))
+    def charisma(self): return WreckProperty(WRECK.libraries.trp, self, 'charisma', (8, WreckAggregateAttr, 0), ('cha', None, 0))
     @property
-    def wp_1h(self): return WreckProperty(WRECK.trp, self, 'wp_1h', (9, unparse_wp_aggregate, 0), (wpt_one_handed_weapon, None, 0))
+    def wp_1h(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_1h', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_one_handed_weapon, None, 0))
     @property
-    def wp_2h(self): return WreckProperty(WRECK.trp, self, 'wp_2h', (9, unparse_wp_aggregate, 0), (wpt_two_handed_weapon, None, 0))
+    def wp_2h(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_2h', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_two_handed_weapon, None, 0))
     @property
-    def wp_polearms(self): return WreckProperty(WRECK.trp, self, 'wp_polearms', (9, unparse_wp_aggregate, 0), (wpt_polearm, None, 0))
+    def wp_polearms(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_polearms', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_polearm, None, 0))
     @property
-    def wp_archery(self): return WreckProperty(WRECK.trp, self, 'wp_archery', (9, unparse_wp_aggregate, 0), (wpt_archery, None, 0))
+    def wp_archery(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_archery', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_archery, None, 0))
     @property
-    def wp_crossbows(self): return WreckProperty(WRECK.trp, self, 'wp_crossbows', (9, unparse_wp_aggregate, 0), (wpt_crossbow, None, 0))
+    def wp_crossbows(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_crossbows', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_crossbow, None, 0))
     @property
-    def wp_thrown(self): return WreckProperty(WRECK.trp, self, 'wp_thrown', (9, unparse_wp_aggregate, 0), (wpt_throwing, None, 0))
+    def wp_thrown(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_thrown', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_throwing, None, 0))
     @property
-    def wp_firearms(self): return WreckProperty(WRECK.trp, self, 'wp_firearms', (9, unparse_wp_aggregate, 0), (wpt_firearm, None, 0))
+    def wp_firearms(self): return WreckProperty(WRECK.libraries.trp, self, 'wp_firearms', (9, WreckAggregateWP, 0), (WRECK.constants.wpt_firearm, None, 0))
     @property
-    def skills(self): return WreckProperty(WRECK.trp, self, 'skills', (10, None, 0))
+    def skills(self): return WreckProperty(WRECK.libraries.trp, self, 'skills', (10, None, 0))
     @property
-    def facecode_1(self): return WreckProperty(WRECK.trp, self, 'facecode_1', (11, None, 0))
+    def facecode_1(self): return WreckProperty(WRECK.libraries.trp, self, 'facecode_1', (11, None, 0))
     @property
-    def facecode_2(self): return WreckProperty(WRECK.trp, self, 'facecode_2', (12, None, 0))
+    def facecode_2(self): return WreckProperty(WRECK.libraries.trp, self, 'facecode_2', (12, None, 0))
     @property
-    def upgrade_path_1(self): return WreckProperty(WRECK.trp, self, 'upgrade_path_1', (14, None, 0))
+    def upgrade_path_1(self): return WreckProperty(WRECK.libraries.trp, self, 'upgrade_path_1', (14, None, 0))
     @property
-    def upgrade_path_2(self): return WreckProperty(WRECK.trp, self, 'upgrade_path_2', (15, None, 0))
+    def upgrade_path_2(self): return WreckProperty(WRECK.libraries.trp, self, 'upgrade_path_2', (15, None, 0))
 
 
 class _WreckLibraryData(object):
@@ -1902,19 +1960,36 @@ class WreckPlugin(object):
 
 _opcode = WreckLibrary('opcode')
 
-_add = WreckOperation('+', lambda a, b: a+b, '+', [_opcode.store_add, 3, '{dest}', '{0}', '{1}'], associative = True)
-_sub = WreckOperation('-', lambda a, b: a-b, '-', [_opcode.store_sub, 3, '{dest}', '{0}', '{1}'])
-_mul = WreckOperation('*', lambda a, b: a*b, '*', [_opcode.store_mul, 3, '{dest}', '{0}', '{1}'], associative = True)
-_div = WreckOperation('/', lambda a, b: a/b, '/', [_opcode.store_div, 3, '{dest}', '{0}', '{1}'])
-_mod = WreckOperation('%', lambda a, b: a%b, '%', [_opcode.store_mod, 3, '{dest}', '{0}', '{1}'])
-_pow = WreckOperation('**', lambda a, b: a**b, '**', [_opcode.store_pow, 3, '{dest}', '{0}', '{1}'])
-_shl = WreckOperation('<<', lambda a, b: a<<b, '<<', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_lshift, 2, '{dest}', '{1}'])
-_shr = WreckOperation('>>', lambda a, b: a<<b, '>>', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_rshift, 2, '{dest}', '{1}'])
-_and = WreckOperation('&', lambda a, b: a&b, '&', [_opcode.store_and, 3, '{dest}', '{0}', '{1}'], associative = True)
-_or  = WreckOperation('|', lambda a, b: a|b, '|', [_opcode.store_or, 3, '{dest}', '{0}', '{1}'], associative = True)
-_xor = WreckOperation('^', lambda a, b: a^b, '^', [_opcode.store_and, 3, '{dest}', '{0}', '{1}'], [_opcode.val_mul, 2, '{dest}', -2], [_opcode.val_add, 2, '{dest}', '{0}'], [_opcode.val_add, 2, '{dest}', '{1}'], associative = True)
-_neg = WreckOperation('neg', lambda a: -a, '(-%r)', [_opcode.store_sub, 3, '{dest}', 0, '{0}'], unary = True)
-_abs = WreckOperation('abs', abs, 'abs(%r)', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_abs, 1, '{dest}'], unary = True)
+maths._add.add_operation([_opcode.store_add, 3, '{dest}', '{0}', '{1}'])
+maths._sub.add_operation([_opcode.store_sub, 3, '{dest}', '{0}', '{1}'])
+maths._mul.add_operation([_opcode.store_mul, 3, '{dest}', '{0}', '{1}'])
+maths._div.add_operation([_opcode.store_div, 3, '{dest}', '{0}', '{1}'])
+maths._mod.add_operation([_opcode.store_mod, 3, '{dest}', '{0}', '{1}'])
+maths._pow.add_operation([_opcode.store_pow, 3, '{dest}', '{0}', '{1}'])
+maths._shl.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_lshift, 2, '{dest}', '{1}'])
+maths._shr.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_rshift, 2, '{dest}', '{1}'])
+
+maths._and.add_operation([_opcode.store_and, 3, '{dest}', '{0}', '{1}'])
+maths._or.add_operation([_opcode.store_or, 3, '{dest}', '{0}', '{1}'])
+
+maths._xor.operations = ([_opcode.store_and, 3, '{dest}', '{0}', '{1}'], [_opcode.val_mul, 2, '{dest}', -2], [_opcode.val_add, 2, '{dest}', '{0}'], [_opcode.val_add, 2, '{dest}', '{1}'])
+maths._neg.add_operation([_opcode.store_sub, 3, '{dest}', 0, '{0}'])
+maths._abs.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_abs, 1, '{dest}'])
+
+# TODO: deprecate old operations, use imported ones once WreckVariable has been refactored
+# _add = WreckOperation('+', lambda a, b: a+b, '+', [_opcode.store_add, 3, '{dest}', '{0}', '{1}'], associative = True)
+# _sub = WreckOperation('-', lambda a, b: a-b, '-', [_opcode.store_sub, 3, '{dest}', '{0}', '{1}'])
+# _mul = WreckOperation('*', lambda a, b: a*b, '*', [_opcode.store_mul, 3, '{dest}', '{0}', '{1}'], associative = True)
+# _div = WreckOperation('/', lambda a, b: a/b, '/', [_opcode.store_div, 3, '{dest}', '{0}', '{1}'])
+# _mod = WreckOperation('%', lambda a, b: a%b, '%', [_opcode.store_mod, 3, '{dest}', '{0}', '{1}'])
+# _pow = WreckOperation('**', lambda a, b: a**b, '**', [_opcode.store_pow, 3, '{dest}', '{0}', '{1}'])
+# _shl = WreckOperation('<<', lambda a, b: a<<b, '<<', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_lshift, 2, '{dest}', '{1}'])
+# _shr = WreckOperation('>>', lambda a, b: a<<b, '>>', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_rshift, 2, '{dest}', '{1}'])
+# _and = WreckOperation('&', lambda a, b: a&b, '&', [_opcode.store_and, 3, '{dest}', '{0}', '{1}'], associative = True)
+# _or  = WreckOperation('|', lambda a, b: a|b, '|', [_opcode.store_or, 3, '{dest}', '{0}', '{1}'], associative = True)
+# _xor = WreckOperation('^', lambda a, b: a^b, '^', [_opcode.store_and, 3, '{dest}', '{0}', '{1}'], [_opcode.val_mul, 2, '{dest}', -2], [_opcode.val_add, 2, '{dest}', '{0}'], [_opcode.val_add, 2, '{dest}', '{1}'], associative = True)
+# _neg = WreckOperation('neg', lambda a: -a, '(-%r)', [_opcode.store_sub, 3, '{dest}', 0, '{0}'], unary = True)
+# _abs = WreckOperation('abs', abs, 'abs(%r)', [_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_abs, 1, '{dest}'], unary = True)
 
 
 # |                                                                            |
@@ -1934,98 +2009,44 @@ _abs = WreckOperation('abs', abs, 'abs(%r)', [_opcode.assign, 2, '{dest}', '{0}'
 
 # These functions override their counterparts in header_items.py
 
-weight         = lambda x: WreckAggregateValue([('weight', 0.01 * int(x * 100 + 0.5))]) # Allow weights > 63 kg and weight precision up to 0.01 kg (Warband however only displays up to 0.1 kg).
-head_armor     = lambda x: WreckAggregateValue([('head', x)]) # Allow armor values > 255
-body_armor     = lambda x: WreckAggregateValue([('body', x)]) # Allow armor values > 255
-leg_armor      = lambda x: WreckAggregateValue([('leg', x)]) # Allow armor values > 255
-difficulty     = lambda x: WreckAggregateValue([('diff', x)])
-hit_points     = lambda x: WreckAggregateValue([('hp', x)])
-spd_rtng       = lambda x: WreckAggregateValue([('speed', x)])
-shoot_speed    = lambda x: WreckAggregateValue([('msspd', x)])
-horse_scale    = lambda x: WreckAggregateValue([('size', x)])
-weapon_length  = lambda x: WreckAggregateValue([('size', x)])
-shield_width   = lambda x: WreckAggregateValue([('size', x)])
-shield_height  = lambda x: WreckAggregateValue([('msspd', x)])
-max_ammo       = lambda x: WreckAggregateValue([('qty', x)]) # Enable quantity > 255
-swing_damage   = lambda d, dt: WreckAggregateValue([('swing',  (dt << 8) | (d & 255))]) # Damage is still limited to 255
-thrust_damage  = lambda d, dt: WreckAggregateValue([('thrust', (dt << 8) | (d & 255))]) # Damage is still limited to 255
-horse_speed    = lambda x: WreckAggregateValue([('msspd', x)])
-horse_maneuver = lambda x: WreckAggregateValue([('speed', x)])
+weight         = lambda x: WreckAggregateItem(weight = x) # Allow weights > 63 kg and weight precision up to 0.01 kg (Warband however only displays up to 0.1 kg).
+head_armor     = lambda x: WreckAggregateItem(head = x) # Allow armor values > 255
+body_armor     = lambda x: WreckAggregateItem(body = x) # Allow armor values > 255
+leg_armor      = lambda x: WreckAggregateItem(leg = x) # Allow armor values > 255
+difficulty     = lambda x: WreckAggregateItem(diff = x)
+hit_points     = lambda x: WreckAggregateItem(hp = x)
+spd_rtng       = lambda x: WreckAggregateItem(speed = x)
+shoot_speed    = lambda x: WreckAggregateItem(msspd = x)
+weapon_length  = lambda x: WreckAggregateItem(size = x)
+max_ammo       = lambda x: WreckAggregateItem(qty = x) # Enable quantity > 255
+swing_damage   = lambda d, dt: WreckAggregateItem(swing = (dt << 8) | (d & 255)) # Damage is still limited to 255
+thrust_damage  = lambda d, dt: WreckAggregateItem(thrust = (dt << 8) | (d & 255)) # Damage is still limited to 255
+horse_maneuver = lambda x: WreckAggregateItem(speed = x)
 horse_charge   = lambda x: thrust_damage(x, 2) # Hardcoded blunt damage
-food_quality   = lambda x: WreckAggregateValue([('head', x)])
-abundance      = lambda x: WreckAggregateValue([('abundance', x)])
-accuracy       = lambda x: WreckAggregateValue([('leg', x)])
+abundance      = lambda x: WreckAggregateItem(abundance = x)
 
-def get_weight(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('weight', 0.0)
-    else:
-        return 0.25 * ((y >> WRECK.constants.ibf_weight_bits) & WRECK.constants.ibf_armor_mask)
-def get_head_armor(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('head',   0)
-    else:
-        return ((y >> WRECK.constants.ibf_head_armor_bits) & WRECK.constants.ibf_armor_mask)
-def get_body_armor(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('body',   0)
-    else:
-        return ((y >> WRECK.constants.ibf_body_armor_bits) & WRECK.constants.ibf_armor_mask)
-def get_leg_armor(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('leg',    0)
-    else:
-        return ((y >> WRECK.constants.ibf_leg_armor_bits) & WRECK.constants.ibf_armor_mask)
-def get_difficulty(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('diff',   0)
-    else:
-        return ((y >> WRECK.constants.ibf_difficulty_bits) & WRECK.constants.ibf_armor_mask)
-def get_hit_points(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('hp',     0)
-    else:
-        return ((y >> WRECK.constants.ibf_hitpoints_bits) & WRECK.constants.ibf_hitpoints_mask)
-def get_speed_rating(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('speed',  0)
-    else:
-        return ((y >> WRECK.constants.iwf_speed_rating_bits) & WRECK.constants.ibf_armor_mask)
-def get_missile_speed(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('msspd',  0)
-    else:
-        return ((y >> WRECK.constants.iwf_shoot_speed_bits) & WRECK.constants.ibf_10bit_mask)
-def get_weapon_length(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('size',   0)
-    else:
-        return ((y >> WRECK.constants.iwf_weapon_length_bits) & WRECK.constants.ibf_10bit_mask)
-def get_max_ammo(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('qty',    0)
-    else:
-        return ((y >> WRECK.constants.iwf_max_ammo_bits) & WRECK.constants.ibf_armor_mask)
-def get_swing_damage(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('swing',  0)
-    else:
-        return ((y >> WRECK.constants.iwf_swing_damage_bits) & WRECK.constants.ibf_damage_mask)
-def get_thrust_damage(y):
-    if isinstance(y, WreckAggregateValue):
-        return y.get('thrust', 0)
-    else:
-        return ((y >> WRECK.constants.iwf_thrust_damage_bits) & WRECK.constants.ibf_damage_mask)
-def get_abundance(y):
-    if isinstance(y, WreckAggregateValue):
-        abundance = y.get('abundance', 100)
-    else:
-        abundance = (y >> WRECK.constants.iwf_abundance_bits) & WRECK.constants.ibf_armor_mask
-    return abundance if abundance else 100
+shield_width = horse_scale = weapon_length
+shield_height = horse_speed = shoot_speed
+food_quality = head_armor
+accuracy = leg_armor
+
+get_weight = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).weight
+get_head_armor = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).head
+get_body_armor = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).body
+get_leg_armor = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).leg
+get_difficulty = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).diff
+get_hit_points = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).hp
+get_speed_rating = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).speed
+get_missile_speed = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).msspd
+get_weapon_length = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).size
+get_max_ammo = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).qty
+get_swing_damage = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).swing
+get_thrust_damage = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).thrust
+get_abundance = lambda y: (y if isinstance(y, WreckAggregateItem) else WreckAggregateItem(y)).abundance
 
 # Overrides for functions and constants in header_troops.py
 
-level = lambda value: WreckAggregateValue({'level':value})
+level = lambda value: WreckAggregateAttr(level = value)
 
 # WRECK-defined convenience functions
 
@@ -2036,7 +2057,7 @@ def SKILLS(**argd):
     return result
 
 def ATTR(_str, _agi, _int, _cha, _lvl = 0):
-    return WreckAggregateValue([('str', _str), ('agi', _agi), ('int', _int), ('cha', _cha), ('level', _lvl)])
+    return WreckAggregateAttr(str = _str, agi = _agi, int = _int, cha = _cha, level = _lvl)
 
 def define_troop_upgrade(*argl):
     stack = _get_current_stack() # stack[0] points to this line, stack[1] to whatever called this function
@@ -2103,9 +2124,53 @@ class WRECK(object):
 
     # Some critical constants that we need to keep track of
     constants = WreckStorageObject(
+        # values from header_operations.py
         neg          = 0x80000000,
         this_or_next = 0x40000000,
+        else_try     = 5,
+        try_end      = 3,
+        lhs_operations = (),
+        global_lhs_operations = (),
+        canfail_operations = (),
+        depth_operations = (),
+
+        # values from header_parties.py
+        ai_bhvr_hold = 0,
+
+        # values from header_items.py
+        ibf_armor_mask     = 0x00ff,
+        ibf_damage_mask    = 0x03ff,
+        ibf_10bit_mask     = 0x03ff,
+        ibf_hitpoints_mask = 0xffff,
+
+        ibf_head_armor_bits         =   0,
+        ibf_body_armor_bits         =   8,
+        ibf_leg_armor_bits          =  16,
+        iwf_accuracy_bits           =  16, # reuse leg_armor for accuracy
+        ibf_weight_bits             =  24,
+        ibf_difficulty_bits         =  32,
+        ibf_hitpoints_bits          =  40,
+        iwf_swing_damage_bits       =  50,
+        iwf_swing_damage_type_bits  =  58,
+        iwf_thrust_damage_bits      =  60,
+        iwf_thrust_damage_type_bits =  68,
+        iwf_weapon_length_bits      =  70,
+        iwf_speed_rating_bits       =  80,
+        iwf_shoot_speed_bits        =  90,
+        iwf_max_ammo_bits           = 100, # use this for shield endurance too?
+        iwf_abundance_bits          = 110,
+
+        iwf_damage_type_bits = 8, # Used to further (un)pack damage type from 10-bit damage value
+
+        # values from header_troops.py
         num_weapon_proficiencies = 6,
+        wpt_one_handed_weapon = 0,
+        wpt_two_handed_weapon = 1,
+        wpt_polearm           = 2,
+        wpt_archery           = 3,
+        wpt_crossbow          = 4,
+        wpt_throwing          = 5,
+        wpt_firearm           = 6,
     )
 
     issues = WreckStorageObject(
@@ -2144,7 +2209,7 @@ class WRECK(object):
                                  parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_float, [(_parse_ref('fac'), _parse_float)], [_parse_str], _optional(_parse_int, 0xAAAAAA)),
                                 ),
         itm       = WreckLibrary('itm', WreckItemReference, module = 'items', data = 'items', export = 'item_kinds1', prefix = 'itm_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(unparse_item_aggregate), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []), _optional([_parse_int], [])),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(WreckAggregateItem), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []), _optional([_parse_int], [])),
                                 ),
         icon      = WreckLibrary('icon', module = 'map_icons', data = 'map_icons', export = 'map_icons', prefix = 'icon_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_int, _optional(_parse_float, 0), _optional(_parse_float, 0), _optional(_parse_float, 0), _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []) ),
@@ -2198,7 +2263,7 @@ class WRECK(object):
                                  parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_int, _parse_script('{lib}.{uid}(#{0})')),
                                 ),
         trp       = WreckLibrary('trp', WreckTroopReference, module = 'troops', data = 'troops', export = 'troops', prefix = 'trp_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_intpair], _parse_aggregate(unparse_attr_aggregate), _parse_aggregate(unparse_wp_aggregate), _parse_int, _parse_int, _optional(_parse_int, 0), _optional(_parse_str, '0'), _optional(_parse_int, 0), _optional(_parse_int, 0)),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_intpair], _parse_aggregate(WreckAggregateAttr), _parse_aggregate(WreckAggregateWP), _parse_int, _parse_int, _optional(_parse_int, 0), _optional(_parse_str, '0'), _optional(_parse_int, 0), _optional(_parse_int, 0)),
                                 ),
         anim      = WreckLibrary('anim', module = 'animations', data = 'animations', export = 'actions', prefix = 'anim_', uid_generator = _uid_std(0),
                                 ),
@@ -2431,7 +2496,9 @@ class WRECK(object):
         cls.log('creating module overrides for attribute-defining constants')
         for index in xrange(3, 32):
             for attr in ('str', 'agi', 'int', 'cha'):
-                cls._module_overrides['%s_%d' % (attr, index)] = WreckAggregateValue({attr: index})
+                value = WreckAggregateAttr()
+                value[attr] = index
+                cls._module_overrides['%s_%d' % (attr, index)] = value
 
         cls._module_namespace['WRECK'] = cls
         cls._module_namespace.update(cls._module_overrides)
@@ -2460,7 +2527,7 @@ class WRECK(object):
     def initialize_module(cls):
         cls.log('initialize_module() started')
 
-        if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules:
+        if cls.config.use_color and sys.platform.startswith('win') and 'colorama' not in sys.modules and 'ANSICON' not in os.environ:
             cls.config.use_color = False
             cls.issues.notifications.append('colorama library is missing, disabling colored output')
             cls.log('configured to use colored output but colorama library is missing on Windows')
@@ -2677,9 +2744,9 @@ class WRECK(object):
         for module, base, upg1, upg2, ref in cls.troop_upgrades:
             if module is None: module = '<wreck>'
             with current_module(module):
-                if not isinstance(base, WreckVariable): base = cls.libraries.trp(base, ref)
-                if not isinstance(upg1, WreckVariable): upg1 = cls.libraries.trp(upg1, ref)
-                if upg2 and not(isinstance(upg2, WreckVariable)): upg2 = cls.libraries.trp(upg2, ref)
+                if not isinstance(base, WreckVariable): base = cls.libraries.trp(str(base), ref)
+                if not isinstance(upg1, WreckVariable): upg1 = cls.libraries.trp(str(upg1), ref)
+                if upg2 and not(isinstance(upg2, WreckVariable)): upg2 = cls.libraries.trp(str(upg2), ref)
             trp_index = int(base)
             if not base.is_forced:
                 with cls.libraries.trp as trp_data:
