@@ -12,8 +12,13 @@ __version__ = "$Revision$"
 
 import sys
 sys.dont_write_bytecode = True
+import time
+
+timers = []
 
 if __name__ == '__main__':
+
+    timers.append(time.time())
 
     import logging
     logging.basicConfig(filename = 'compile.log', filemode = 'w+', format = '%(name)s: %(message)s', level = logging.DEBUG)
@@ -36,10 +41,24 @@ if __name__ == '__main__':
         WRECK.validate_module()
         WRECK.preload_headers()
 
+        timers.append(time.time())
+
         WRECK.load_module_data()      # load module files and process them
-        #WRECK.apply_plugins()         # apply plugin effects (extend module data, prepare injections)
+
+        timers.append(time.time())
+
+        WRECK.apply_plugins()         # apply plugin effects (extend module data, prepare injections)
+
+        timers.append(time.time())
+
         WRECK.validate_module_data()  # validate module data (parse all entries, apply injections)
+
+        timers.append(time.time())
+
         WRECK.resolve_references()    # assign all references to their actual values
+
+        timers.append(time.time())
+
         # Data entry modifications are no longer allowed after this point
         WRECK.apply_troop_upgrades()  # Replace placeholders in troop definitions with actual upgrade paths accumulated by this point
         WRECK.compile_scripts()       # Compile all script objects
@@ -54,5 +73,15 @@ if __name__ == '__main__':
         print e.formatted()
         exit(1)
 
+    timers.append(time.time())
+
     from pprint import pprint
     pprint(WRECK.issues.__dict__)
+    print
+    print 'INIT     : %.03f sec.' % (timers[1] - timers[0])
+    print 'LOAD     : %.03f sec.' % (timers[2] - timers[1])
+    print 'PLUGINS  : %.03f sec.' % (timers[3] - timers[2])
+    print 'PARSE    : %.03f sec.' % (timers[4] - timers[3])
+    print 'REFERENCE: %.03f sec.' % (timers[5] - timers[4])
+    print 'CLOSING  : %.03f sec.' % (timers[6] - timers[5])
+    print
