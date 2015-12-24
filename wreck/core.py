@@ -29,6 +29,7 @@ else:
     colorama.init()
 
 import maths # wrecked maths
+from .maths import *
 # endregion
 
 
@@ -192,7 +193,7 @@ def _get_current_stack():
     return map(lambda i: (i[1], i[2], i[3], i[4][0]), inspect_stack())[1:]
 
 
-class WreckAggregateItem(maths.WreckAggregateValue):
+class WreckAggregateItem(WreckAggregateValue):
     fields = {
         'weight': (
             lambda pck: 0.25 * ((pck >> WRECK.constants.ibf_weight_bits) & WRECK.constants.ibf_armor_mask),
@@ -248,7 +249,7 @@ class WreckAggregateItem(maths.WreckAggregateValue):
         ),
     }
 
-class WreckAggregateAttr(maths.WreckAggregateValue):
+class WreckAggregateAttr(WreckAggregateValue):
     fields = {
         'str': (
             lambda pck: pck & 0xff,
@@ -272,13 +273,13 @@ class WreckAggregateAttr(maths.WreckAggregateValue):
         ),
     }
 
-class WreckAggregateWP(maths.WreckAggregateValue):
+class WreckAggregateWP(WreckAggregateValue):
 
     fields = dict(
         (index, (lambda pck: pck >> (10 * index) & 0x3ff, lambda val: (val & 0x3ff) << (10 * index))) for index in xrange(7)
     )
 
-class WreckAggregateTerrain(maths.WreckAggregateValue):
+class WreckAggregateTerrain(WreckAggregateValue):
     fields = {
         'terrain_seed': (
             lambda pck: int('0x0%s' % pck[-4:], 16) if isinstance(pck, str) else (pck & 0xffffffff),
@@ -421,7 +422,7 @@ def _import_sanitize_overrides(data):
         if (key in WRECK._module_overrides) and (data[key] != WRECK._module_overrides[key]):
             WRECK.log('value conflict for %r: %s.%s = %r, WRECK.%s = %r: using WRECK value' % (key, current_module(), key, data[key], key, WRECK._module_overrides[key]))
             data[key] = WRECK._module_overrides[key]
-        elif (key == 'pos_belfry_begin') and not isinstance(data[key], maths.WreckFakeInt):
+        elif (key == 'pos_belfry_begin') and not isinstance(data[key], WreckVariable):
             WRECK._module_namespace[key] = data[key] = getattr(WRECK.libraries._posreg, 'pos%d' % int(data[key]))
             WRECK.log('tracked value %r updated by module, replicating changes to shared module namespace' % (key, ))
         elif (key == 'def_attrib') and not isinstance(data[key], WreckAggregateAttr):
@@ -681,12 +682,12 @@ def _uid_trigger(entry, index):
     if int(entry[0]) in WRECK.reference_triggers: timer = WRECK.reference_triggers[int(entry[0])]
     else: timer = '{0:.2f}'.format(entry[0])
     repeat = 'ti_once' if entry[2] == 100000000.0 else '{0:.2f}'.format(entry[2])
-    return '#{0}_i_{1}_d_{2:.2f}_ra_{3}'.format(index, timer, entry[1], repeat)
+    return '#{0}:{1},{2:.2f},{3}'.format(index, timer, entry[1], repeat)
 
 def _uid_strigger(entry, index):
     if int(entry[0]) in WRECK.reference_triggers: timer = WRECK.reference_triggers[int(entry[0])]
     else: timer = '{0:.2f}'.format(entry[0])
-    return '#{0}_i_{1}_sec'.format(index, timer)
+    return '#{0}:{1}'.format(index, timer)
 
 
 class _WreckSyntaxErrorHandler(object):
@@ -733,7 +734,7 @@ def _parse_uid(rec, ofs, path = [], **argd):
 
 def _parse_int(rec, ofs, path = [], **argd):
     #print '_parse_int for %r in %r' % (path + [ofs], argd.get('uid'))
-    if isinstance(rec[ofs], maths.WreckFakeInt):
+    if isinstance(rec[ofs], WreckVariable):
         if not rec[ofs].is_static:
             _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', rec[ofs])
             return 0, 1
@@ -750,7 +751,7 @@ def _parse_int(rec, ofs, path = [], **argd):
 
 def _parse_float(rec, ofs, path = [], **argd):
     #print '_parse_float for %r in %r' % (path + [ofs], argd.get('uid'))
-    if isinstance(rec[ofs], maths.WreckFakeInt):
+    if isinstance(rec[ofs], WreckVariable):
         if not rec[ofs].is_static:
             _syntax_error(path + [ofs], argd, 'value of variable {0!r} cannot be determined at compile time', rec[ofs])
             return 0.0, 1
@@ -780,7 +781,7 @@ def _parse_ref(lib_name):
             _syntax_error(path + [ofs], argd, 'illegal library {0!r} in _parse_ref definition', lib_name)
             return 0, 1
         # TODO: handle situation when reference is from a different library than expected: add mistake message
-        if isinstance(rec[ofs], maths.WreckFakeInt): return rec[ofs], 1
+        if isinstance(rec[ofs], WreckVariable): return rec[ofs], 1
         if isinstance(rec[ofs], str):
             prefix = library['prefix']
             if prefix and rec[ofs].startswith(prefix):
@@ -1175,7 +1176,7 @@ class WreckSourcedList(list):
         super(WreckSourceList, self).__init__(data)
 
 
-class WreckReference(maths.WreckFakeInt):
+class WreckReference(WreckVariable):
     """Base class for Warband module variables and references.
 
     This class handles module variables and references, as well as any mathematical expressions that use them.
@@ -1235,7 +1236,7 @@ class WreckReference(maths.WreckFakeInt):
     # TODO: seems there are bugs when representing expressions: they become too heavy instead of gracefully collapsing
     def __repr__(self):
         if self.is_expression:
-            if isinstance(self.operation[0], maths.WreckOperation):
+            if isinstance(self.operation[0], WreckOperation):
                 if self.operation[0].unary:
                     return self.operation[0].text % self.operation[1:]
                 repr_ops = map(repr, self.operation[1:])
@@ -1286,7 +1287,7 @@ class WreckReference(maths.WreckFakeInt):
                     operands.append(tmp_local)
                 else:
                     operands.append(operand)
-            if isinstance(self.operation[0], maths.WreckOperation):
+            if isinstance(self.operation[0], WreckOperation):
                 try:
                     op_count, new_code = self.operation[0].compile(destination, *operands)
                     code.extend(new_code)
@@ -1349,7 +1350,7 @@ class WreckOpcode(WreckReference):
     __repr__ = lambda self: self.name
 
 
-class WreckProperty(maths.WreckFakeInt):
+class WreckProperty(WreckVariable):
     """A subclass of WreckReference, providing compile-time hooks to actual values in module files.
 
     With properties it becomes possible to retrieve values directly from module files tuples at compile-time, like
@@ -1733,6 +1734,27 @@ class WreckLibrary(object):
         return len(self.__data.entries)
 
 
+def _ws_trigname_(index, entry, path, extras, uid_generator):
+    for offset in xrange(1, index + 1):
+        entry = entry[path[offset]]
+    result = uid_generator(entry, path[index])
+    #WRECK.log('_ws_trigname_(%d, %s, %r) = %s', index, compressed_list(entry), path, result)
+    extras['T%d' % index] = result
+    return path[index]
+
+def _ws_trigname(index, entry, path, extras):
+    return _ws_trigname_(index, entry, path, extras, _uid_trigger)
+
+def _ws_strigname(index, entry, path, extras):
+    return _ws_trigname_(index, entry, path, extras, _uid_strigger)
+
+def _ws_getfirst(index, entry, path, extras):
+    for offset in xrange(1, index + 1):
+        entry = entry[path[offset]]
+    #WRECK.log('_ws_getfirst(%d, %s, %r) = %r', index, compressed_list(entry), path, entry[0])
+    extras['T%d' % index] = entry[0]
+    return path[index]
+
 class WreckScript(object):
     name = ''
     source = None
@@ -1747,17 +1769,19 @@ class WreckScript(object):
             self.check_canfail = True
         # name_gen = '{lib}.{uid}{0}..{N}'
         replacer = list(path)
+        extras = {}
         if conversions:
             for key, value in conversions.iteritems():
                 if isinstance(value, dict):
                     replacer[key] = value.get(replacer[key])
                 elif callable(value):
-                    replacer[key] = value(replacer[key], entry, path)
+                    replacer[key] = value(key, entry, path, extras)
                 else:
                     replacer[key] = value # Fallback, we shouldn't ever use this
         lib_name = '<?>'
-        self.name = name_gen.format(*replacer, lib = lib['basename'], uid = uid)
+        self.name = name_gen.format(*replacer, lib = lib['basename'], uid = uid, **extras)
 
+    # TODO: extract as compressed_list() function
     def compress_entry(self, entry):
         result = ', '.join(self.compress_entry(item) if isinstance(item, list) else repr(item) for item in entry[:5])
         return '[%s%s]' % (result, ', ...' if len(entry) > 5 else '')
@@ -1805,21 +1829,21 @@ class WreckPlugin(object):
 
 _opcode = WreckLibrary('opcode')
 
-maths._add.add_operation([_opcode.store_add, 3, '{dest}', '{0}', '{1}'])
-maths._sub.add_operation([_opcode.store_sub, 3, '{dest}', '{0}', '{1}'])
-maths._mul.add_operation([_opcode.store_mul, 3, '{dest}', '{0}', '{1}'])
-maths._div.add_operation([_opcode.store_div, 3, '{dest}', '{0}', '{1}'])
-maths._mod.add_operation([_opcode.store_mod, 3, '{dest}', '{0}', '{1}'])
-maths._pow.add_operation([_opcode.store_pow, 3, '{dest}', '{0}', '{1}'])
-maths._shl.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_lshift, 2, '{dest}', '{1}'])
-maths._shr.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_rshift, 2, '{dest}', '{1}'])
+wo_add.add_operation([_opcode.store_add, 3, '{dest}', '{0}', '{1}'])
+wo_sub.add_operation([_opcode.store_sub, 3, '{dest}', '{0}', '{1}'])
+wo_mul.add_operation([_opcode.store_mul, 3, '{dest}', '{0}', '{1}'])
+wo_div.add_operation([_opcode.store_div, 3, '{dest}', '{0}', '{1}'])
+wo_mod.add_operation([_opcode.store_mod, 3, '{dest}', '{0}', '{1}'])
+wo_pow.add_operation([_opcode.store_pow, 3, '{dest}', '{0}', '{1}'])
+wo_shl.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_lshift, 2, '{dest}', '{1}'])
+wo_shr.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_rshift, 2, '{dest}', '{1}'])
 
-maths._and.add_operation([_opcode.store_and, 3, '{dest}', '{0}', '{1}'])
-maths._or.add_operation([_opcode.store_or, 3, '{dest}', '{0}', '{1}'])
+wo_and.add_operation([_opcode.store_and, 3, '{dest}', '{0}', '{1}'])
+wo_or.add_operation([_opcode.store_or, 3, '{dest}', '{0}', '{1}'])
 
-maths._xor.operations = ([_opcode.store_and, 3, '{dest}', '{0}', '{1}'], [_opcode.val_mul, 2, '{dest}', -2], [_opcode.val_add, 2, '{dest}', '{0}'], [_opcode.val_add, 2, '{dest}', '{1}'])
-maths._neg.add_operation([_opcode.store_sub, 3, '{dest}', 0, '{0}'])
-maths._abs.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_abs, 1, '{dest}'])
+wo_xor.operations = ([_opcode.store_and, 3, '{dest}', '{0}', '{1}'], [_opcode.val_mul, 2, '{dest}', -2], [_opcode.val_add, 2, '{dest}', '{0}'], [_opcode.val_add, 2, '{dest}', '{1}'])
+wo_neg.add_operation([_opcode.store_sub, 3, '{dest}', 0, '{0}'])
+wo_abs.operations = ([_opcode.assign, 2, '{dest}', '{0}'], [_opcode.val_abs, 1, '{dest}'])
 
 
 # |                                                                            |
@@ -2042,19 +2066,19 @@ class WRECK(object):
                                  parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_float, [(_parse_ref('fac'), _parse_float)], [_parse_str], _optional(_parse_int, 0xAAAAAA)),
                                 ),
         itm       = WreckLibrary('itm', WreckItemReference, module = 'items', data = 'items', export = 'item_kinds1', prefix = 'itm_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(WreckAggregateItem), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []), _optional([_parse_int], [])),
+                                 parser = _parse_tuple(_parse_uid, _parse_str, [(_parse_id, _parse_int)], _parse_int, _parse_int, _parse_int, _parse_aggregate(WreckAggregateItem), _parse_int, _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger({T2})', {2:_ws_strigname}))], []), _optional([_parse_int], [])),
                                 ),
         icon      = WreckLibrary('icon', module = 'map_icons', data = 'map_icons', export = 'map_icons', prefix = 'icon_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_int, _optional(_parse_float, 0), _optional(_parse_float, 0), _optional(_parse_float, 0), _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))], []) ),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_int, _optional(_parse_float, 0), _optional(_parse_float, 0), _optional(_parse_float, 0), _optional([(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger({T2})', {2:_ws_strigname}))], []) ),
                                 ),
         mnu       = WreckLibrary('mnu', module = 'game_menus', data = 'game_menus', export = 'menus', prefix = 'mnu_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_str, _parse_expect('none'), _parse_script('{lib}.{uid}(#{0}).init'), [(_parse_id, _parse_script('{lib}.{uid}(#{0}).item(#{2}).conditions'), _parse_str, _parse_script('{lib}.{uid}(#{0}).item(#{2}).consequences'), _optional(_parse_str, ''))]),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_str, _parse_expect('none'), _parse_script('{lib}.{uid}(#{0}).init'), [(_parse_id, _parse_script('{lib}.{uid}(#{0}).mno_{T2}(#{2}).conditions', {2:_ws_getfirst}), _parse_str, _parse_script('{lib}.{uid}(#{0}).mno_{T2}(#{2}).consequences', {2:_ws_getfirst}), _optional(_parse_str, ''))]),
                                 ),
         mesh      = WreckLibrary('mesh', module = 'meshes', data = 'meshes', export = 'meshes', prefix = 'mesh_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float, _parse_float),
                                 ),
         mt        = WreckLibrary('mt', module = 'mission_templates', data = 'mission_templates', export = 'mission_templates', prefix = 'mt_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, _parse_str, [(_parse_int, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_int])], [(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).conditions'), _parse_script('{lib}.{uid}(#{0}).trigger(#{2}).consequences'))]),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, _parse_str, [(_parse_int, _parse_int, _parse_int, _parse_int, _parse_int, [_parse_int])], [(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).trigger({T2}).conditions', {2:_ws_trigname}), _parse_script('{lib}.{uid}(#{0}).trigger({T2}).consequences', {2:_ws_trigname}))]),
                                 ),
         track     = WreckLibrary('track', module = 'music', data = 'tracks', export = 'music', prefix = 'track_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_uid, _parse_file('{export_path}/Music/{file}', '{warband_path}/music/{file}'), _parse_int, _parse_int),
@@ -2069,13 +2093,13 @@ class WRECK(object):
                                  parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_int, _parse_int, _parse_int, [(_parse_int, _parse_int, _parse_int, _optional(_parse_int, 0))]),
                                 ),
         prsnt     = WreckLibrary('prsnt', module = 'presentations', data = 'presentations', export = 'presentations', prefix = 'prsnt_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_int, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger({T2})', {2:_ws_strigname}))]),
                                 ),
         qst       = WreckLibrary('qst', module = 'quests', data = 'quests', export = 'quests', prefix = 'qst_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_uid, _parse_str, _parse_int, _parse_str),
                                 ),
         spr       = WreckLibrary('spr', module = 'scene_props', data = 'scene_props', export = 'scene_props', prefix = 'spr_', uid_generator = _uid_std(0),
-                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger(#{2})'))]),
+                                 parser = _parse_tuple(_parse_uid, _parse_int, _parse_id, _parse_id, [(_parse_float, _parse_script('{lib}.{uid}(#{0}).trigger({T2})', {2:_ws_strigname}))]),
                                 ),
         scn       = WreckLibrary('scn', WreckSceneReference, module = 'scenes', data = 'scenes', export = 'scenes', prefix = 'scn_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_file('{export_path}/SceneObj/{file}.scn'), _parse_int, _parse_id, _parse_id, (_parse_float, _parse_float), (_parse_float, _parse_float), _parse_float, _parse_id, [_parse_ref('scn')], [_parse_ref('trp')], _optional(_parse_id, '0')),
@@ -2109,10 +2133,10 @@ class WRECK(object):
                                 ),
         _dlgst    = WreckLibrary('dialog_state', export = 'dialog_states', extendable = False), # Filled by dialog processor/aggregator
         _trig     = WreckLibrary('trigger', module = 'triggers', data = 'triggers', export = 'triggers', extendable = False, uid_generator = _uid_trigger,
-                                 parser = _parse_tuple(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}(#{0}).conditions'), _parse_script('{lib}.{uid}(#{0}).consequences')),
+                                 parser = _parse_tuple(_parse_float, _parse_float, _parse_float, _parse_script('{lib}.{uid}.conditions'), _parse_script('{lib}.{uid}.consequences')),
                                 ),
         _strig    = WreckLibrary('simple_trigger', module = 'simple_triggers', data = 'simple_triggers', export = 'simple_triggers', extendable = False, uid_generator = _uid_strigger,
-                                 parser = _parse_tuple(_parse_float, _parse_script('{lib}.{uid}(#{0})')),
+                                 parser = _parse_tuple(_parse_float, _parse_script('{lib}.{uid}')),
                                 ),
         imod      = WreckLibrary('imod', WreckItemModifierReference, prefix = 'imod_', uid_generator = _uid_std(0),
                                  parser = _parse_tuple(_parse_uid, _parse_str, _parse_float, _parse_float),

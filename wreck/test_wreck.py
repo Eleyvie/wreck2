@@ -37,12 +37,12 @@ class TestWreckInternals(unittest.TestCase):
 class TestWreckOperationClass(unittest.TestCase):
 
     def test_wreck_operations(self):
-        self.assertEquals(compiler.maths._add(4, 11), 15)
-        self.assertEquals(compiler.maths._mul.text % (4, 11), '(4 * 11)')
-        op_count, code = compiler.maths._shl.compile(10, 8, 1)
+        self.assertEquals(compiler.maths.wo_add(4, 11), 15)
+        self.assertEquals(compiler.maths.wo_mul.text % (4, 11), '(4 * 11)')
+        op_count, code = compiler.maths.wo_shl.compile(10, 8, 1)
         self.assertEquals(op_count, 2)
         self.assertEquals(code, [compiler.assign, 2, 10, 8, compiler.val_lshift, 2, 10, 1])
-        op_count, code = compiler.maths._xor.compile(5, 11, 4)
+        op_count, code = compiler.maths.wo_xor.compile(5, 11, 4)
         self.assertEquals(op_count, 4)
 
 

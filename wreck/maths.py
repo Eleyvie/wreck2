@@ -63,22 +63,22 @@ class WreckOperation(object):
         return self.opcount, code
 
 
-_add = WreckOperation('+', lambda a, b: a+b, '+', associative = True)
-_sub = WreckOperation('-', lambda a, b: a-b, '-')
-_mul = WreckOperation('*', lambda a, b: a*b, '*', associative = True)
-_div = WreckOperation('/', lambda a, b: a/b, '/')
-_mod = WreckOperation('%', lambda a, b: a%b, '%')
-_pow = WreckOperation('**', lambda a, b: a**b, '**')
-_shl = WreckOperation('<<', lambda a, b: a<<b, '<<')
-_shr = WreckOperation('>>', lambda a, b: a<<b, '>>')
-_and = WreckOperation('&', lambda a, b: a&b, '&', associative = True)
-_or  = WreckOperation('|', lambda a, b: a|b, '|', associative = True)
-_xor = WreckOperation('^', lambda a, b: a^b, '^', associative = True)
-_neg = WreckOperation('neg', lambda a: -a, '(-%r)', unary = True)
-_abs = WreckOperation('abs', abs, 'abs(%r)', unary = True)
+wo_add = WreckOperation('+', lambda a, b: a + b, '+', associative = True)
+wo_sub = WreckOperation('-', lambda a, b: a - b, '-')
+wo_mul = WreckOperation('*', lambda a, b: a * b, '*', associative = True)
+wo_div = WreckOperation('/', lambda a, b: a / b, '/')
+wo_mod = WreckOperation('%', lambda a, b: a % b, '%')
+wo_pow = WreckOperation('**', lambda a, b: a ** b, '**')
+wo_shl = WreckOperation('<<', lambda a, b: a << b, '<<')
+wo_shr = WreckOperation('>>', lambda a, b: a << b, '>>')
+wo_and = WreckOperation('&', lambda a, b: a & b, '&', associative = True)
+wo_or  = WreckOperation('|', lambda a, b: a | b, '|', associative = True)
+wo_xor = WreckOperation('^', lambda a, b: a ^ b, '^', associative = True)
+wo_neg = WreckOperation('neg', lambda a: -a, '(-%r)', unary = True)
+wo_abs = WreckOperation('abs', abs, 'abs(%r)', unary = True)
 
 
-class WreckFakeInt(object):
+class WreckVariable(object):
 
     value = None
     operation = None
@@ -97,7 +97,7 @@ class WreckFakeInt(object):
             self.is_required = False
             if static:
                 for operand in operation[1:]:
-                    if isinstance(operand, WreckFakeInt) and not operand.is_static: static = False
+                    if isinstance(operand, WreckVariable) and not operand.is_static: static = False
         else:
             self.value = value
         self.is_static = static
@@ -125,11 +125,11 @@ class WreckFakeInt(object):
             if not self.is_static:
                 return self.resolve_dynamic_eval()
             try:
-                return self.operation[0](*map(lambda v: v._resolve_value() if isinstance(v, WreckFakeInt) else v, self.operation[1:]))
+                return self.operation[0](*map(lambda v: v._resolve_value() if isinstance(v, WreckVariable) else v, self.operation[1:]))
             except ArithmeticError as e:
                 self.is_forced = True
                 for operand in self.operation[1:]:
-                    if isinstance(operand, WreckFakeInt) and operand.is_forced:
+                    if isinstance(operand, WreckVariable) and operand.is_forced:
                         return 0
                 return self.resolve_failed_eval(e)
         else:
@@ -143,31 +143,31 @@ class WreckFakeInt(object):
     __float__ = lambda self: float(self._resolve_value())
     __str__ = lambda self: str(self._resolve_value())
 
-    def __add__(self, other):    return self.expression_class(operation = (_add, self, other))
-    def __sub__(self, other):    return self.expression_class(operation = (_sub, self, other))
-    def __mul__(self, other):    return self.expression_class(operation = (_mul, self, other))
-    def __div__(self, other):    return self.expression_class(operation = (_div, self, other))
-    def __mod__(self, other):    return self.expression_class(operation = (_mod, self, other))
-    def __pow__(self, other):    return self.expression_class(operation = (_pow, self, other))
-    def __lshift__(self, other): return self.expression_class(operation = (_shl, self, other))
-    def __rshift__(self, other): return self.expression_class(operation = (_shr, self, other))
-    def __and__(self, other):    return self.expression_class(operation = (_and, self, other))
-    def __or__(self, other):     return self.expression_class(operation = (_or, self, other))
+    def __add__(self, other):    return self.expression_class(operation = (wo_add, self, other))
+    def __sub__(self, other):    return self.expression_class(operation = (wo_sub, self, other))
+    def __mul__(self, other):    return self.expression_class(operation = (wo_mul, self, other))
+    def __div__(self, other):    return self.expression_class(operation = (wo_div, self, other))
+    def __mod__(self, other):    return self.expression_class(operation = (wo_mod, self, other))
+    def __pow__(self, other):    return self.expression_class(operation = (wo_pow, self, other))
+    def __lshift__(self, other): return self.expression_class(operation = (wo_shl, self, other))
+    def __rshift__(self, other): return self.expression_class(operation = (wo_shr, self, other))
+    def __and__(self, other):    return self.expression_class(operation = (wo_and, self, other))
+    def __or__(self, other):     return self.expression_class(operation = (wo_or, self, other))
 
-    def __radd__(self, other):    return self.expression_class(operation = (_add, other, self))
-    def __rsub__(self, other):    return self.expression_class(operation = (_sub, other, self))
-    def __rmul__(self, other):    return self.expression_class(operation = (_mul, other, self))
-    def __rdiv__(self, other):    return self.expression_class(operation = (_div, other, self))
-    def __rmod__(self, other):    return self.expression_class(operation = (_mod, other, self))
-    def __rpow__(self, other):    return self.expression_class(operation = (_pow, other, self))
-    def __rlshift__(self, other): return self.expression_class(operation = (_shl, other, self))
-    def __rrshift__(self, other): return self.expression_class(operation = (_shr, other, self))
-    def __rand__(self, other):    return self.expression_class(operation = (_and, other, self))
-    def __ror__(self, other):     return self.expression_class(operation = (_or, other, self))
+    def __radd__(self, other):    return self.expression_class(operation = (wo_add, other, self))
+    def __rsub__(self, other):    return self.expression_class(operation = (wo_sub, other, self))
+    def __rmul__(self, other):    return self.expression_class(operation = (wo_mul, other, self))
+    def __rdiv__(self, other):    return self.expression_class(operation = (wo_div, other, self))
+    def __rmod__(self, other):    return self.expression_class(operation = (wo_mod, other, self))
+    def __rpow__(self, other):    return self.expression_class(operation = (wo_pow, other, self))
+    def __rlshift__(self, other): return self.expression_class(operation = (wo_shl, other, self))
+    def __rrshift__(self, other): return self.expression_class(operation = (wo_shr, other, self))
+    def __rand__(self, other):    return self.expression_class(operation = (wo_and, other, self))
+    def __ror__(self, other):     return self.expression_class(operation = (wo_or, other, self))
 
-    def __neg__(self): return self.expression_class(operation = (_neg, self))
+    def __neg__(self): return self.expression_class(operation = (wo_neg, self))
     def __pos__(self): return self
-    def __abs__(self): return self.expression_class(operation = (_abs, self))
+    def __abs__(self): return self.expression_class(operation = (wo_abs, self))
 
     __truediv__ = __div__
     __rtruediv__ = __rdiv__
@@ -182,7 +182,7 @@ class WreckFakeInt(object):
     __ge__ = lambda self, other: int(self) >= other
 
 
-class WreckAggregateValue(WreckFakeInt, dict):
+class WreckAggregateValue(WreckVariable, dict):
 
     fields = {
         'byte0': (lambda v: v & 0xff,         lambda f: f),
@@ -198,7 +198,7 @@ class WreckAggregateValue(WreckFakeInt, dict):
             dict.__init__(self)
             for key, (unpack, pack) in self.fields.iteritems():
                 self[key] = unpack(raw_value)
-        WreckFakeInt.__init__(self, self.__int__())
+        WreckVariable.__init__(self, self.__int__())
 
     def __int__(self):
         if not len(self): return 0
@@ -326,7 +326,7 @@ def forge_inheritances(disguise_heir = {}, disguise_type = {}, disguise_tree = {
         return python_type(obj)
     __builtin__.type       = disguised_type
 
-forge_inheritances(disguise_tree = { WreckFakeInt: int})
+forge_inheritances(disguise_tree = { WreckVariable: int })
 
 if __name__ == '__main__':
     a = WreckAggregateValue(5184)
